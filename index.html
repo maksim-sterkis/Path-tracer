@@ -1,78 +1,89 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>WebGL 2 Cornell Box Path Tracer</title>
-  <style>
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      user-select: none;
-      -webkit-user-select: none;
-    }
-    html, body {
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-      background-color: #000000;
-      cursor: crosshair;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "JetBrains Mono", Consolas, monospace;
-    }
-    canvas {
-      display: block;
-      width: 100vw;
-      height: 100vh;
-    }
-    /* Minimal pure text overlay: no cards, no borders, no backgrounds */
-    .hud {
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      z-index: 10;
-      font-family: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas, monospace;
-      font-size: 11px;
-      letter-spacing: 0.05em;
-      color: rgba(255, 255, 255, 0.88);
-      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95), 0 0 2px rgba(0, 0, 0, 0.95);
-    }
-    #hud-top {
-      position: absolute;
-      top: 14px;
-      left: 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }
-    #hud-bottom {
-      position: absolute;
-      bottom: 14px;
-      left: 50%;
-      transform: translateX(-50%);
-      white-space: nowrap;
-      color: rgba(255, 255, 255, 0.65);
-    }
-    .hud-hidden {
-      display: none !important;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebGL 2 Cornell Box Path Tracer</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000000;
+            cursor: crosshair;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "JetBrains Mono", Consolas, monospace;
+        }
+
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* Minimal pure text overlay: no cards, no borders, no backgrounds */
+        .hud {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 10;
+            font-family: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas, monospace;
+            font-size: 11px;
+            letter-spacing: 0.05em;
+            color: rgba(255, 255, 255, 0.88);
+            text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95), 0 0 2px rgba(0, 0, 0, 0.95);
+        }
+
+        #hud-top {
+            position: absolute;
+            top: 14px;
+            left: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        #hud-bottom {
+            position: absolute;
+            bottom: 14px;
+            left: 50%;
+            transform: translateX(-50%);
+            white-space: nowrap;
+            color: rgba(255, 255, 255, 0.65);
+        }
+
+        .hud-hidden {
+            display: none !important;
+        }
+    </style>
 </head>
+
 <body>
-  <canvas id="pt-canvas"></canvas>
+    <canvas id="pt-canvas"></canvas>
 
-  <div id="hud" class="hud">
-    <div id="hud-top">
-      <div>PASSES: <span id="hud-samples">0</span></div>
-      <div>RES: <span id="hud-res">0 × 0</span></div>
+    <div id="hud" class="hud">
+        <div id="hud-top">
+            <div>PASSES: <span id="hud-samples">0</span></div>
+            <div>RES: <span id="hud-res">0 × 0</span></div>
+            <div>FPS: <span id="hud-fps">0</span></div>
+        </div>
+        <div id="hud-bottom">
+            WASD: Move &nbsp;·&nbsp; Space: Up &nbsp;·&nbsp; Shift: Down &nbsp;·&nbsp; Click: Look &nbsp;·&nbsp; H: Hide
+            Text
+        </div>
     </div>
-    <div id="hud-bottom">
-      WASD: Move &nbsp;·&nbsp; Space: Up &nbsp;·&nbsp; Shift: Down &nbsp;·&nbsp; Click: Look &nbsp;·&nbsp; H: Hide Text
-    </div>
-  </div>
 
-  <script>
-    const vsSource = `#version 300 es
+    <script>
+        const vsSource = `#version 300 es
     layout(location = 0) in vec2 aPosition;
     out vec2 vUV;
     void main() {
@@ -80,7 +91,7 @@
         gl_Position = vec4(aPosition, 0.0, 1.0);
     }`;
 
-    const ptFsSource = `#version 300 es
+        const ptFsSource = `#version 300 es
     precision highp float;
     precision highp int;
 
@@ -197,7 +208,7 @@
                     hit.t = t;
                     hit.p = p;
                     hit.normal = vec3(0.0, 1.0, 0.0);
-                    hit.albedo = vec3(0.73, 0.73, 0.73);
+                    hit.albedo = vec3(0.725, 0.71, 0.68);
                     hit.emission = vec3(0.0);
                 }
             }
@@ -212,11 +223,11 @@
                     hit.t = t;
                     hit.p = p;
                     hit.normal = vec3(0.0, -1.0, 0.0);
-                    if (abs(p.x) <= 1.75 && abs(p.z) <= 1.75) {
-                        hit.albedo = vec3(1.0);
-                        hit.emission = vec3(24.0, 20.0, 16.0);
+                    if (abs(p.x) <= 1.25 && abs(p.z) <= 1.05) {
+                        hit.albedo = vec3(0.78, 0.78, 0.78);
+                        hit.emission = vec3(17.0, 12.0, 4.0);
                     } else {
-                        hit.albedo = vec3(0.73, 0.73, 0.73);
+                        hit.albedo = vec3(0.725, 0.71, 0.68);
                         hit.emission = vec3(0.0);
                     }
                 }
@@ -232,7 +243,7 @@
                     hit.t = t;
                     hit.p = p;
                     hit.normal = vec3(0.0, 0.0, 1.0);
-                    hit.albedo = vec3(0.73, 0.73, 0.73);
+                    hit.albedo = vec3(0.725, 0.71, 0.68);
                     hit.emission = vec3(0.0);
                 }
             }
@@ -247,7 +258,7 @@
                     hit.t = t;
                     hit.p = p;
                     hit.normal = vec3(1.0, 0.0, 0.0);
-                    hit.albedo = vec3(0.75, 0.15, 0.15);
+                    hit.albedo = vec3(0.63, 0.065, 0.05);
                     hit.emission = vec3(0.0);
                 }
             }
@@ -262,15 +273,15 @@
                     hit.t = t;
                     hit.p = p;
                     hit.normal = vec3(-1.0, 0.0, 0.0);
-                    hit.albedo = vec3(0.15, 0.75, 0.15);
+                    hit.albedo = vec3(0.14, 0.45, 0.091);
                     hit.emission = vec3(0.0);
                 }
             }
         }
 
         // Tall Box & Short Box
-        intersectBox(r, vec3(-1.6, 3.0, -1.8), vec3(1.5, 3.0, 1.5), 0.30, vec3(0.73, 0.73, 0.73), hit);
-        intersectBox(r, vec3(1.6, 1.5, 1.6), vec3(1.5, 1.5, 1.5), -0.30, vec3(0.73, 0.73, 0.73), hit);
+        intersectBox(r, vec3(-1.67, 3.0, -1.28), vec3(1.5, 3.0, 1.5), -0.30, vec3(0.725, 0.71, 0.68), hit);
+        intersectBox(r, vec3(1.64, 1.5, 1.98), vec3(1.5, 1.5, 1.5), 0.30, vec3(0.725, 0.71, 0.68), hit);
 
         return hit.t < 1e19;
     }
@@ -300,8 +311,8 @@
         Ray r;
         r.origin = origin;
         r.dir = dir;
-        if (isOccludedBox(r, vec3(-1.6, 3.0, -1.8), vec3(1.5, 3.0, 1.5), 0.30, maxDist)) return true;
-        if (isOccludedBox(r, vec3(1.6, 1.5, 1.6), vec3(1.5, 1.5, 1.5), -0.30, maxDist)) return true;
+        if (isOccludedBox(r, vec3(-1.67, 3.0, -1.28), vec3(1.5, 3.0, 1.5), -0.30, maxDist)) return true;
+        if (isOccludedBox(r, vec3(1.64, 1.5, 1.98), vec3(1.5, 1.5, 1.5), 0.30, maxDist)) return true;
         return false;
     }
 
@@ -340,7 +351,7 @@
 
             // Next Event Estimation (Direct Area Light Sampling)
             vec2 lightRand = rand2(seed);
-            vec3 lightPoint = vec3(mix(-1.75, 1.75, lightRand.x), 9.98, mix(-1.75, 1.75, lightRand.y));
+            vec3 lightPoint = vec3(mix(-1.25, 1.25, lightRand.x), 9.98, mix(-1.05, 1.05, lightRand.y));
             vec3 toLight = lightPoint - hit.p;
             float distSq = dot(toLight, toLight);
             float dist = sqrt(distSq);
@@ -351,8 +362,8 @@
 
             if (cosTheta > 0.0 && cosLight > 0.0) {
                 if (!isOccluded(hit.p + hit.normal * 0.002, lightDir, dist - 0.004)) {
-                    float lightArea = 3.5 * 3.5;
-                    vec3 lightEmission = vec3(24.0, 20.0, 16.0);
+                    float lightArea = 2.5 * 2.1;
+                    vec3 lightEmission = vec3(17.0, 12.0, 4.0);
                     float geom = (cosTheta * cosLight) / distSq;
                     radiance += throughput * hit.albedo * lightEmission * (geom * lightArea * (1.0 / 3.14159265));
                 }
@@ -375,7 +386,7 @@
         }
     }`;
 
-    const displayFsSource = `#version 300 es
+        const displayFsSource = `#version 300 es
     precision highp float;
 
     in vec2 vUV;
@@ -399,331 +410,343 @@
         fragColor = vec4(color, 1.0);
     }`;
 
-    const canvas = document.getElementById('pt-canvas');
-    const gl = canvas.getContext('webgl2', {
-      antialias: false,
-      powerPreference: 'high-performance',
-      preserveDrawingBuffer: false
-    });
+        const canvas = document.getElementById('pt-canvas');
+        const gl = canvas.getContext('webgl2', {
+            antialias: false,
+            powerPreference: 'high-performance',
+            preserveDrawingBuffer: false
+        });
 
-    if (!gl) {
-      document.body.innerHTML = '<div style="color:white;padding:20px;font-family:monospace;">WebGL 2 is not supported by your browser.</div>';
-    }
-
-    gl.getExtension('EXT_color_buffer_float');
-
-    function createShader(glCtx, type, source) {
-      const shader = glCtx.createShader(type);
-      glCtx.shaderSource(shader, source.trim());
-      glCtx.compileShader(shader);
-      if (!glCtx.getShaderParameter(shader, glCtx.COMPILE_STATUS)) {
-        console.error('Shader compile error:', glCtx.getShaderInfoLog(shader));
-        glCtx.deleteShader(shader);
-        return null;
-      }
-      return shader;
-    }
-
-    function createProgram(glCtx, vsSrc, fsSrc) {
-      const vs = createShader(glCtx, glCtx.VERTEX_SHADER, vsSrc);
-      const fs = createShader(glCtx, glCtx.FRAGMENT_SHADER, fsSrc);
-      if (!vs || !fs) return null;
-      const program = glCtx.createProgram();
-      glCtx.attachShader(program, vs);
-      glCtx.attachShader(program, fs);
-      glCtx.linkProgram(program);
-      if (!glCtx.getProgramParameter(program, glCtx.LINK_STATUS)) {
-        console.error('Program link error:', glCtx.getProgramInfoLog(program));
-        glCtx.deleteProgram(program);
-        return null;
-      }
-      return program;
-    }
-
-    const ptProgram = createProgram(gl, vsSource, ptFsSource);
-    const displayProgram = createProgram(gl, vsSource, displayFsSource);
-
-    const ptUniforms = {
-      uResolution: gl.getUniformLocation(ptProgram, 'uResolution'),
-      uCamPos: gl.getUniformLocation(ptProgram, 'uCamPos'),
-      uCamRot: gl.getUniformLocation(ptProgram, 'uCamRot'),
-      uFov: gl.getUniformLocation(ptProgram, 'uFov'),
-      uFrameSeed: gl.getUniformLocation(ptProgram, 'uFrameSeed'),
-      uSampleCount: gl.getUniformLocation(ptProgram, 'uSampleCount'),
-      uAccumTexture: gl.getUniformLocation(ptProgram, 'uAccumTexture')
-    };
-
-    const displayUniforms = {
-      uAccumTexture: gl.getUniformLocation(displayProgram, 'uAccumTexture')
-    };
-
-    const quadVAO = gl.createVertexArray();
-    gl.bindVertexArray(quadVAO);
-    const quadVBO = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, quadVBO);
-    gl.bufferData(
-      gl.ARRAY_BUFFER,
-      new Float32Array([
-        -1, -1,
-         1, -1,
-        -1,  1,
-        -1,  1,
-         1, -1,
-         1,  1
-      ]),
-      gl.STATIC_DRAW
-    );
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-    gl.bindVertexArray(null);
-
-    const cam = {
-      pos: [0.0, 5.0, 14.0],
-      yaw: 0.0,
-      pitch: 0.0,
-      speed: 6.0,
-      fov: (55.0 * Math.PI) / 180.0
-    };
-
-    const keys = {
-      forward: false,
-      backward: false,
-      left: false,
-      right: false,
-      up: false,
-      down: false
-    };
-
-    let sampleCount = 0;
-    let lastTime = performance.now();
-
-    let internalFormat = gl.RGBA32F;
-    let texType = gl.FLOAT;
-
-    function testFBO(format, type) {
-      const tex = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.texImage2D(gl.TEXTURE_2D, 0, format, 4, 4, 0, gl.RGBA, type, null);
-      const fb = gl.createFramebuffer();
-      gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-      const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
-      gl.deleteFramebuffer(fb);
-      gl.deleteTexture(tex);
-      return status;
-    }
-
-    if (testFBO(gl.RGBA32F, gl.FLOAT)) {
-      internalFormat = gl.RGBA32F;
-      texType = gl.FLOAT;
-    } else if (gl.HALF_FLOAT && testFBO(gl.RGBA16F, gl.HALF_FLOAT)) {
-      internalFormat = gl.RGBA16F;
-      texType = gl.HALF_FLOAT;
-    } else {
-      internalFormat = gl.RGBA;
-      texType = gl.UNSIGNED_BYTE;
-    }
-
-    const fbos = [null, null];
-    const textures = [null, null];
-    let readIndex = 0;
-    let writeIndex = 1;
-
-    function initFBOs(width, height) {
-      for (let i = 0; i < 2; i++) {
-        if (textures[i]) gl.deleteTexture(textures[i]);
-        if (fbos[i]) gl.deleteFramebuffer(fbos[i]);
-
-        textures[i] = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D, textures[i]);
-        gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, width, height, 0, gl.RGBA, texType, null);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-
-        fbos[i] = gl.createFramebuffer();
-        gl.bindFramebuffer(gl.FRAMEBUFFER, fbos[i]);
-        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, textures[i], 0);
-      }
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      readIndex = 0;
-      writeIndex = 1;
-      sampleCount = 0;
-    }
-
-    canvas.addEventListener('click', () => {
-      if (document.pointerLockElement !== canvas) {
-        canvas.requestPointerLock();
-      }
-    });
-
-    document.addEventListener('mousemove', (e) => {
-      if (document.pointerLockElement === canvas) {
-        const sensitivity = 0.0022;
-        cam.yaw -= e.movementX * sensitivity;
-        cam.pitch -= e.movementY * sensitivity;
-        cam.pitch = Math.max(-1.52, Math.min(1.52, cam.pitch));
-        sampleCount = 0;
-      }
-    });
-
-    window.addEventListener('keydown', (e) => {
-      switch (e.code) {
-        case 'KeyW': keys.forward = true; break;
-        case 'KeyS': keys.backward = true; break;
-        case 'KeyA': keys.left = true; break;
-        case 'KeyD': keys.right = true; break;
-        case 'Space': keys.up = true; e.preventDefault(); break;
-        case 'ShiftLeft':
-        case 'ShiftRight': keys.down = true; e.preventDefault(); break;
-        case 'KeyH': {
-          const hud = document.getElementById('hud');
-          if (hud) hud.classList.toggle('hud-hidden');
-          break;
+        if (!gl) {
+            document.body.innerHTML = '<div style="color:white;padding:20px;font-family:monospace;">WebGL 2 is not supported by your browser.</div>';
         }
-      }
-    });
 
-    window.addEventListener('keyup', (e) => {
-      switch (e.code) {
-        case 'KeyW': keys.forward = false; break;
-        case 'KeyS': keys.backward = false; break;
-        case 'KeyA': keys.left = false; break;
-        case 'KeyD': keys.right = false; break;
-        case 'Space': keys.up = false; break;
-        case 'ShiftLeft':
-        case 'ShiftRight': keys.down = false; break;
-      }
-    });
+        gl.getExtension('EXT_color_buffer_float');
 
-    function onResize() {
-      const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
-      const width = Math.floor(window.innerWidth * dpr);
-      const height = Math.floor(window.innerHeight * dpr);
+        function createShader(glCtx, type, source) {
+            const shader = glCtx.createShader(type);
+            glCtx.shaderSource(shader, source.trim());
+            glCtx.compileShader(shader);
+            if (!glCtx.getShaderParameter(shader, glCtx.COMPILE_STATUS)) {
+                console.error('Shader compile error:', glCtx.getShaderInfoLog(shader));
+                glCtx.deleteShader(shader);
+                return null;
+            }
+            return shader;
+        }
 
-      if (canvas.width !== width || canvas.height !== height) {
-        canvas.width = width;
-        canvas.height = height;
-        initFBOs(width, height);
-        const resEl = document.getElementById('hud-res');
-        if (resEl) resEl.textContent = `${width} × ${height}`;
-      }
-    }
+        function createProgram(glCtx, vsSrc, fsSrc) {
+            const vs = createShader(glCtx, glCtx.VERTEX_SHADER, vsSrc);
+            const fs = createShader(glCtx, glCtx.FRAGMENT_SHADER, fsSrc);
+            if (!vs || !fs) return null;
+            const program = glCtx.createProgram();
+            glCtx.attachShader(program, vs);
+            glCtx.attachShader(program, fs);
+            glCtx.linkProgram(program);
+            if (!glCtx.getProgramParameter(program, glCtx.LINK_STATUS)) {
+                console.error('Program link error:', glCtx.getProgramInfoLog(program));
+                glCtx.deleteProgram(program);
+                return null;
+            }
+            return program;
+        }
 
-    function updateCamera(dt) {
-      let moved = false;
-      const cosY = Math.cos(cam.yaw);
-      const sinY = Math.sin(cam.yaw);
+        const ptProgram = createProgram(gl, vsSource, ptFsSource);
+        const displayProgram = createProgram(gl, vsSource, displayFsSource);
 
-      const fwd = [-sinY, 0, -cosY];
-      const right = [cosY, 0, -sinY];
+        const ptUniforms = {
+            uResolution: gl.getUniformLocation(ptProgram, 'uResolution'),
+            uCamPos: gl.getUniformLocation(ptProgram, 'uCamPos'),
+            uCamRot: gl.getUniformLocation(ptProgram, 'uCamRot'),
+            uFov: gl.getUniformLocation(ptProgram, 'uFov'),
+            uFrameSeed: gl.getUniformLocation(ptProgram, 'uFrameSeed'),
+            uSampleCount: gl.getUniformLocation(ptProgram, 'uSampleCount'),
+            uAccumTexture: gl.getUniformLocation(ptProgram, 'uAccumTexture')
+        };
 
-      const moveDir = [0, 0, 0];
-      if (keys.forward) { moveDir[0] += fwd[0]; moveDir[2] += fwd[2]; moved = true; }
-      if (keys.backward) { moveDir[0] -= fwd[0]; moveDir[2] -= fwd[2]; moved = true; }
-      if (keys.right) { moveDir[0] += right[0]; moveDir[2] += right[2]; moved = true; }
-      if (keys.left) { moveDir[0] -= right[0]; moveDir[2] -= right[2]; moved = true; }
-      if (keys.up) { moveDir[1] += 1.0; moved = true; }
-      if (keys.down) { moveDir[1] -= 1.0; moved = true; }
+        const displayUniforms = {
+            uAccumTexture: gl.getUniformLocation(displayProgram, 'uAccumTexture')
+        };
 
-      const len = Math.hypot(moveDir[0], moveDir[1], moveDir[2]);
-      if (len > 0.001) {
-        moveDir[0] /= len;
-        moveDir[1] /= len;
-        moveDir[2] /= len;
-      }
+        const quadVAO = gl.createVertexArray();
+        gl.bindVertexArray(quadVAO);
+        const quadVBO = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, quadVBO);
+        gl.bufferData(
+            gl.ARRAY_BUFFER,
+            new Float32Array([
+                -1, -1,
+                1, -1,
+                -1, 1,
+                -1, 1,
+                1, -1,
+                1, 1
+            ]),
+            gl.STATIC_DRAW
+        );
+        gl.enableVertexAttribArray(0);
+        gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+        gl.bindVertexArray(null);
 
-      if (moved) {
-        const dist = cam.speed * dt;
-        cam.pos[0] += moveDir[0] * dist;
-        cam.pos[1] += moveDir[1] * dist;
-        cam.pos[2] += moveDir[2] * dist;
-        sampleCount = 0;
-      }
-    }
+        const cam = {
+            pos: [0.0, 5.0, 15.55],
+            yaw: 0.0,
+            pitch: 0.0,
+            speed: 6.0,
+            fov: (55.0 * Math.PI) / 180.0
+        };
 
-    function render(now) {
-      const dt = Math.min((now - lastTime) * 0.001, 0.1);
-      lastTime = now;
+        const keys = {
+            forward: false,
+            backward: false,
+            left: false,
+            right: false,
+            up: false,
+            down: false
+        };
 
-      onResize();
-      updateCamera(dt);
+        let sampleCount = 0;
+        let lastTime = performance.now();
+        let frameCount = 0;
+        let lastFpsUpdate = performance.now();
+        const sampleEl = document.getElementById('hud-samples');
+        const fpsEl = document.getElementById('hud-fps');
 
-      // 1. Path Tracing Accumulation Pass
-      gl.bindFramebuffer(gl.FRAMEBUFFER, fbos[writeIndex]);
-      gl.viewport(0, 0, canvas.width, canvas.height);
-      gl.useProgram(ptProgram);
+        let internalFormat = gl.RGBA32F;
+        let texType = gl.FLOAT;
 
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, textures[readIndex]);
-      gl.uniform1i(ptUniforms.uAccumTexture, 0);
+        function testFBO(format, type) {
+            const tex = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, tex);
+            gl.texImage2D(gl.TEXTURE_2D, 0, format, 4, 4, 0, gl.RGBA, type, null);
+            const fb = gl.createFramebuffer();
+            gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+            gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+            const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+            gl.deleteFramebuffer(fb);
+            gl.deleteTexture(tex);
+            return status;
+        }
 
-      gl.uniform2f(ptUniforms.uResolution, canvas.width, canvas.height);
-      gl.uniform3fv(ptUniforms.uCamPos, cam.pos);
+        if (testFBO(gl.RGBA32F, gl.FLOAT)) {
+            internalFormat = gl.RGBA32F;
+            texType = gl.FLOAT;
+        } else if (gl.HALF_FLOAT && testFBO(gl.RGBA16F, gl.HALF_FLOAT)) {
+            internalFormat = gl.RGBA16F;
+            texType = gl.HALF_FLOAT;
+        } else {
+            internalFormat = gl.RGBA;
+            texType = gl.UNSIGNED_BYTE;
+        }
 
-      const cosY = Math.cos(cam.yaw);
-      const sinY = Math.sin(cam.yaw);
-      const cosP = Math.cos(cam.pitch);
-      const sinP = Math.sin(cam.pitch);
+        const fbos = [null, null];
+        const textures = [null, null];
+        let readIndex = 0;
+        let writeIndex = 1;
 
-      const F = [-sinY * cosP, sinP, -cosY * cosP];
-      const R = [cosY, 0, -sinY];
-      const U = [
-        R[1] * F[2] - R[2] * F[1],
-        R[2] * F[0] - R[0] * F[2],
-        R[0] * F[1] - R[1] * F[0]
-      ];
+        function initFBOs(width, height) {
+            for (let i = 0; i < 2; i++) {
+                if (textures[i]) gl.deleteTexture(textures[i]);
+                if (fbos[i]) gl.deleteFramebuffer(fbos[i]);
 
-      const lenF = Math.hypot(F[0], F[1], F[2]);
-      F[0] /= lenF; F[1] /= lenF; F[2] /= lenF;
-      const lenR = Math.hypot(R[0], R[1], R[2]);
-      R[0] /= lenR; R[1] /= lenR; R[2] /= lenR;
-      const lenU = Math.hypot(U[0], U[1], U[2]);
-      U[0] /= lenU; U[1] /= lenU; U[2] /= lenU;
+                textures[i] = gl.createTexture();
+                gl.bindTexture(gl.TEXTURE_2D, textures[i]);
+                gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, width, height, 0, gl.RGBA, texType, null);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-      const rotMatrix = new Float32Array([
-        R[0], R[1], R[2],
-        U[0], U[1], U[2],
-        -F[0], -F[1], -F[2]
-      ]);
+                fbos[i] = gl.createFramebuffer();
+                gl.bindFramebuffer(gl.FRAMEBUFFER, fbos[i]);
+                gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, textures[i], 0);
+            }
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            readIndex = 0;
+            writeIndex = 1;
+            sampleCount = 0;
+        }
 
-      gl.uniformMatrix3fv(ptUniforms.uCamRot, false, rotMatrix);
-      gl.uniform1f(ptUniforms.uFov, cam.fov);
-      gl.uniform1ui(ptUniforms.uFrameSeed, (Math.random() * 0xFFFFFFFF) >>> 0);
-      gl.uniform1i(ptUniforms.uSampleCount, sampleCount);
+        canvas.addEventListener('click', () => {
+            if (document.pointerLockElement !== canvas) {
+                canvas.requestPointerLock();
+            }
+        });
 
-      gl.bindVertexArray(quadVAO);
-      gl.drawArrays(gl.TRIANGLES, 0, 6);
+        document.addEventListener('mousemove', (e) => {
+            if (document.pointerLockElement === canvas) {
+                const sensitivity = 0.0022;
+                cam.yaw -= e.movementX * sensitivity;
+                cam.pitch -= e.movementY * sensitivity;
+                cam.pitch = Math.max(-1.52, Math.min(1.52, cam.pitch));
+                sampleCount = 0;
+            }
+        });
 
-      // 2. Tonemapping and Output Pass
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      gl.viewport(0, 0, canvas.width, canvas.height);
-      gl.useProgram(displayProgram);
+        window.addEventListener('keydown', (e) => {
+            switch (e.code) {
+                case 'KeyW': keys.forward = true; break;
+                case 'KeyS': keys.backward = true; break;
+                case 'KeyA': keys.left = true; break;
+                case 'KeyD': keys.right = true; break;
+                case 'Space': keys.up = true; e.preventDefault(); break;
+                case 'ShiftLeft':
+                case 'ShiftRight': keys.down = true; e.preventDefault(); break;
+                case 'KeyH': {
+                    const hud = document.getElementById('hud');
+                    if (hud) hud.classList.toggle('hud-hidden');
+                    break;
+                }
+            }
+        });
 
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, textures[writeIndex]);
-      gl.uniform1i(displayUniforms.uAccumTexture, 0);
+        window.addEventListener('keyup', (e) => {
+            switch (e.code) {
+                case 'KeyW': keys.forward = false; break;
+                case 'KeyS': keys.backward = false; break;
+                case 'KeyA': keys.left = false; break;
+                case 'KeyD': keys.right = false; break;
+                case 'Space': keys.up = false; break;
+                case 'ShiftLeft':
+                case 'ShiftRight': keys.down = false; break;
+            }
+        });
 
-      gl.bindVertexArray(quadVAO);
-      gl.drawArrays(gl.TRIANGLES, 0, 6);
+        function onResize() {
+            const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
+            const width = Math.floor(window.innerWidth * dpr);
+            const height = Math.floor(window.innerHeight * dpr);
 
-      // Ping-pong buffer swap & sample counter update
-      const temp = readIndex;
-      readIndex = writeIndex;
-      writeIndex = temp;
-      sampleCount++;
+            if (canvas.width !== width || canvas.height !== height) {
+                canvas.width = width;
+                canvas.height = height;
+                initFBOs(width, height);
+                const resEl = document.getElementById('hud-res');
+                if (resEl) resEl.textContent = `${width} × ${height}`;
+            }
+        }
 
-      const sampleEl = document.getElementById('hud-samples');
-      if (sampleEl) sampleEl.textContent = sampleCount;
+        function updateCamera(dt) {
+            let moved = false;
+            const cosY = Math.cos(cam.yaw);
+            const sinY = Math.sin(cam.yaw);
 
-      requestAnimationFrame(render);
-    }
+            const fwd = [-sinY, 0, -cosY];
+            const right = [cosY, 0, -sinY];
 
-    window.onload = function() {
-      onResize();
-      requestAnimationFrame(render);
-    };
-  </script>
+            const moveDir = [0, 0, 0];
+            if (keys.forward) { moveDir[0] += fwd[0]; moveDir[2] += fwd[2]; moved = true; }
+            if (keys.backward) { moveDir[0] -= fwd[0]; moveDir[2] -= fwd[2]; moved = true; }
+            if (keys.right) { moveDir[0] += right[0]; moveDir[2] += right[2]; moved = true; }
+            if (keys.left) { moveDir[0] -= right[0]; moveDir[2] -= right[2]; moved = true; }
+            if (keys.up) { moveDir[1] += 1.0; moved = true; }
+            if (keys.down) { moveDir[1] -= 1.0; moved = true; }
+
+            const len = Math.hypot(moveDir[0], moveDir[1], moveDir[2]);
+            if (len > 0.001) {
+                moveDir[0] /= len;
+                moveDir[1] /= len;
+                moveDir[2] /= len;
+            }
+
+            if (moved) {
+                const dist = cam.speed * dt;
+                cam.pos[0] += moveDir[0] * dist;
+                cam.pos[1] += moveDir[1] * dist;
+                cam.pos[2] += moveDir[2] * dist;
+                sampleCount = 0;
+            }
+        }
+
+        function render(now) {
+            const dt = Math.min((now - lastTime) * 0.001, 0.1);
+            lastTime = now;
+
+            onResize();
+            updateCamera(dt);
+
+            // 1. Path Tracing Accumulation Pass
+            gl.bindFramebuffer(gl.FRAMEBUFFER, fbos[writeIndex]);
+            gl.viewport(0, 0, canvas.width, canvas.height);
+            gl.useProgram(ptProgram);
+
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, textures[readIndex]);
+            gl.uniform1i(ptUniforms.uAccumTexture, 0);
+
+            gl.uniform2f(ptUniforms.uResolution, canvas.width, canvas.height);
+            gl.uniform3fv(ptUniforms.uCamPos, cam.pos);
+
+            const cosY = Math.cos(cam.yaw);
+            const sinY = Math.sin(cam.yaw);
+            const cosP = Math.cos(cam.pitch);
+            const sinP = Math.sin(cam.pitch);
+
+            const F = [-sinY * cosP, sinP, -cosY * cosP];
+            const R = [cosY, 0, -sinY];
+            const U = [
+                R[1] * F[2] - R[2] * F[1],
+                R[2] * F[0] - R[0] * F[2],
+                R[0] * F[1] - R[1] * F[0]
+            ];
+
+            const lenF = Math.hypot(F[0], F[1], F[2]);
+            F[0] /= lenF; F[1] /= lenF; F[2] /= lenF;
+            const lenR = Math.hypot(R[0], R[1], R[2]);
+            R[0] /= lenR; R[1] /= lenR; R[2] /= lenR;
+            const lenU = Math.hypot(U[0], U[1], U[2]);
+            U[0] /= lenU; U[1] /= lenU; U[2] /= lenU;
+
+            const rotMatrix = new Float32Array([
+                R[0], R[1], R[2],
+                U[0], U[1], U[2],
+                -F[0], -F[1], -F[2]
+            ]);
+
+            gl.uniformMatrix3fv(ptUniforms.uCamRot, false, rotMatrix);
+            gl.uniform1f(ptUniforms.uFov, cam.fov);
+            gl.uniform1ui(ptUniforms.uFrameSeed, (Math.random() * 0xFFFFFFFF) >>> 0);
+            gl.uniform1i(ptUniforms.uSampleCount, sampleCount);
+
+            gl.bindVertexArray(quadVAO);
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+            // 2. Tonemapping and Output Pass
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            gl.viewport(0, 0, canvas.width, canvas.height);
+            gl.useProgram(displayProgram);
+
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, textures[writeIndex]);
+            gl.uniform1i(displayUniforms.uAccumTexture, 0);
+
+            gl.bindVertexArray(quadVAO);
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+            // Ping-pong buffer swap & sample counter update
+            const temp = readIndex;
+            readIndex = writeIndex;
+            writeIndex = temp;
+            sampleCount++;
+
+            if (sampleEl) sampleEl.textContent = sampleCount;
+
+            frameCount++;
+            if (now - lastFpsUpdate >= 250) {
+                const fps = Math.round((frameCount * 1000) / (now - lastFpsUpdate));
+                if (fpsEl) fpsEl.textContent = fps;
+                frameCount = 0;
+                lastFpsUpdate = now;
+            }
+
+            requestAnimationFrame(render);
+        }
+
+        window.onload = function () {
+            onResize();
+            requestAnimationFrame(render);
+        };
+    </script>
 </body>
+
 </html>
