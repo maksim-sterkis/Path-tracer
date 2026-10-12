@@ -64,6 +64,33 @@
         .hud-hidden {
             display: none !important;
         }
+
+        .hud-btn {
+            background: rgba(18, 18, 18, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: rgba(255, 255, 255, 0.75);
+            padding: 3px 8px;
+            font-family: inherit;
+            font-size: 11px;
+            cursor: pointer;
+            border-radius: 4px;
+            letter-spacing: 0.05em;
+            pointer-events: auto;
+            transition: all 0.15s ease;
+            backdrop-filter: blur(4px);
+        }
+
+        .hud-btn:hover {
+            border-color: rgba(255, 255, 255, 0.6);
+            color: #ffffff;
+            background: rgba(45, 45, 45, 0.85);
+        }
+
+        .hud-btn-active {
+            border-color: #4ade80;
+            color: #4ade80;
+            background: rgba(20, 55, 30, 0.7);
+        }
     </style>
 </head>
 
@@ -75,9 +102,14 @@
             <div>PASSES: <span id="hud-samples">0</span></div>
             <div>RES: <span id="hud-res">0 × 0</span></div>
             <div>FPS: <span id="hud-fps">0</span> &nbsp;·&nbsp; RAYS/FRAME: <span id="hud-spp">2</span></div>
+            <div style="margin-top: 4px; display: flex; gap: 6px; flex-wrap: wrap;">
+                <button id="btn-single-pass" class="hud-btn">1-Frame: OFF [P]</button>
+                <button id="btn-technique" class="hud-btn hud-btn-active">Technique: MIS [T]</button>
+                <button id="btn-object" class="hud-btn">Object: Cube [O]</button>
+            </div>
         </div>
         <div id="hud-bottom">
-            WASD: Move &nbsp;·&nbsp; Space: Up &nbsp;·&nbsp; Shift: Down &nbsp;·&nbsp; Click: Look &nbsp;·&nbsp; 1-5: Rays/Frame &nbsp;·&nbsp; H: Hide Text
+            WASD: Move &nbsp;·&nbsp; Space: Up &nbsp;·&nbsp; Shift: Down &nbsp;·&nbsp; Click: Look &nbsp;·&nbsp; 1-5: Rays &nbsp;·&nbsp; P: 1-Frame &nbsp;·&nbsp; T: Technique &nbsp;·&nbsp; O: Object &nbsp;·&nbsp; H: Hide Text
         </div>
     </div>
 
@@ -95,7 +127,7 @@
     precision highp int;
 
     in vec2 vUV;
-    out vec4 fragColor;
+    layout(location = 0) out vec4 fragColor;
 
     uniform vec2 uResolution;
     uniform vec3 uCamPos;
@@ -104,6 +136,8 @@
     uniform uint uFrameSeed;
     uniform int uSampleCount;
     uniform int uSamplesPerFrame;
+    uniform int uTechnique; // 0: Pure BRDF, 1: Pure NEE, 2: MIS
+    uniform int uUseSphere;  // 0: Cube, 1: Metal Ball
     uniform sampler2D uAccumTexture;
 
     struct Ray {
@@ -117,6 +151,8 @@
         vec3 normal;
         vec3 albedo;
         vec3 emission;
+        float roughness;
+        float metallic;
     };
 
     // Fast PCG PRNG
@@ -186,6 +222,8 @@
             hit.p = r.origin + r.dir * t;
             hit.albedo = albedo;
             hit.emission = vec3(0.0);
+            hit.roughness = 1.0;
+            hit.metallic = 0.0;
 
             vec3 hitLocal = localRo + localRd * t;
             vec3 d = abs(hitLocal) - halfSize;
@@ -207,6 +245,25 @@
         }
     }
 
+    void intersectSphere(Ray r, vec3 center, float radius, vec3 albedo, float roughness, float metallic, inout HitInfo hit) {
+        vec3 oc = r.origin - center;
+        float b = dot(oc, r.dir);
+        float c = dot(oc, oc) - radius * radius;
+        float h = b * b - c;
+        if (h > 0.0) {
+            float t = -b - sqrt(h);
+            if (t > 0.001 && t < hit.t) {
+                hit.t = t;
+                hit.p = r.origin + r.dir * t;
+                hit.normal = normalize(hit.p - center);
+                hit.albedo = albedo;
+                hit.emission = vec3(0.0);
+                hit.roughness = roughness;
+                hit.metallic = metallic;
+            }
+        }
+    }
+
     bool intersectScene(Ray r, inout HitInfo hit) {
         hit.t = 1e20;
 
@@ -221,6 +278,8 @@
                     hit.normal = vec3(0.0, 1.0, 0.0);
                     hit.albedo = vec3(0.725, 0.71, 0.68);
                     hit.emission = vec3(0.0);
+                    hit.roughness = 1.0;
+                    hit.metallic = 0.0;
                 }
             }
         }
@@ -241,6 +300,8 @@
                         hit.albedo = vec3(0.725, 0.71, 0.68);
                         hit.emission = vec3(0.0);
                     }
+                    hit.roughness = 1.0;
+                    hit.metallic = 0.0;
                 }
             }
         }
@@ -256,6 +317,8 @@
                     hit.normal = vec3(0.0, 0.0, 1.0);
                     hit.albedo = vec3(0.725, 0.71, 0.68);
                     hit.emission = vec3(0.0);
+                    hit.roughness = 1.0;
+                    hit.metallic = 0.0;
                 }
             }
         }
@@ -271,6 +334,8 @@
                     hit.normal = vec3(1.0, 0.0, 0.0);
                     hit.albedo = vec3(0.63, 0.065, 0.05);
                     hit.emission = vec3(0.0);
+                    hit.roughness = 1.0;
+                    hit.metallic = 0.0;
                 }
             }
         }
@@ -286,13 +351,21 @@
                     hit.normal = vec3(-1.0, 0.0, 0.0);
                     hit.albedo = vec3(0.14, 0.45, 0.091);
                     hit.emission = vec3(0.0);
+                    hit.roughness = 1.0;
+                    hit.metallic = 0.0;
                 }
             }
         }
 
-        // Tall Box & Short Box
+        // Tall Box
         intersectBox(r, vec3(-1.67, 3.0, -1.28), vec3(1.5, 3.0, 1.5), -0.30, vec3(0.725, 0.71, 0.68), hit);
-        intersectBox(r, vec3(1.64, 1.5, 1.98), vec3(1.5, 1.5, 1.5), 0.30, vec3(0.725, 0.71, 0.68), hit);
+
+        // Short Object: either Short Box or Metal Ball
+        if (uUseSphere == 1) {
+            intersectSphere(r, vec3(1.64, 1.5, 1.98), 1.5, vec3(0.95, 0.95, 0.95), 0.04, 1.0, hit);
+        } else {
+            intersectBox(r, vec3(1.64, 1.5, 1.98), vec3(1.5, 1.5, 1.5), 0.30, vec3(0.725, 0.71, 0.68), hit);
+        }
 
         return hit.t < 1e19;
     }
@@ -318,13 +391,35 @@
         return (t > 0.001 && t < maxT);
     }
 
+    bool isOccludedSphere(Ray r, vec3 center, float radius, float maxDist) {
+        vec3 oc = r.origin - center;
+        float b = dot(oc, r.dir);
+        float c = dot(oc, oc) - radius * radius;
+        float h = b * b - c;
+        if (h > 0.0) {
+            float t = -b - sqrt(h);
+            if (t > 0.001 && t < maxDist) return true;
+        }
+        return false;
+    }
+
     bool isOccluded(vec3 origin, vec3 dir, float maxDist) {
         Ray r;
         r.origin = origin;
         r.dir = dir;
         if (isOccludedBox(r, vec3(-1.67, 3.0, -1.28), vec3(1.5, 3.0, 1.5), -0.30, maxDist)) return true;
-        if (isOccludedBox(r, vec3(1.64, 1.5, 1.98), vec3(1.5, 1.5, 1.5), 0.30, maxDist)) return true;
+        if (uUseSphere == 1) {
+            if (isOccludedSphere(r, vec3(1.64, 1.5, 1.98), 1.5, maxDist)) return true;
+        } else {
+            if (isOccludedBox(r, vec3(1.64, 1.5, 1.98), vec3(1.5, 1.5, 1.5), 0.30, maxDist)) return true;
+        }
         return false;
+    }
+
+    float powerHeuristic(float a, float b) {
+        float a2 = a * a;
+        float b2 = b * b;
+        return a2 / (a2 + b2 + 1e-12);
     }
 
     void main() {
@@ -351,6 +446,7 @@
 
             vec3 radiance = vec3(0.0);
             vec3 throughput = vec3(1.0);
+            float lastPdfBrdf = 0.0;
 
             const int MAX_BOUNCES = 3;
             for (int b = 0; b < MAX_BOUNCES; ++b) {
@@ -359,39 +455,93 @@
                     break;
                 }
 
+                // If ray hits light emitter directly or via bounce
                 if (length(hit.emission) > 0.0) {
                     if (b == 0) {
+                        // Camera ray directly sees emitter
                         radiance += throughput * hit.emission;
+                    } else {
+                        if (uTechnique == 0) {
+                            // Pure BRDF: full emission collected on bounce hit
+                            radiance += throughput * hit.emission;
+                        } else if (uTechnique == 2) {
+                            // MIS: evaluate weight against light area sampling PDF
+                            float dist = hit.t;
+                            float cosLight = max(0.0, ray.dir.y);
+                            if (cosLight > 0.0) {
+                                float lightArea = 2.5 * 2.1;
+                                float pdfLight = (dist * dist) / (lightArea * cosLight);
+                                float wBrdf = powerHeuristic(lastPdfBrdf, pdfLight);
+                                radiance += throughput * hit.emission * wBrdf;
+                            }
+                        }
                     }
                     break;
                 }
 
-                // Next Event Estimation with R4 low-discrepancy sampling
+                // 1. Next Event Estimation (Direct Light Sampling)
                 vec4 r4 = r4Sequence(sampleIdx * 4u + uint(b), pixelOffset);
-                vec2 lightRand = r4.xy;
-                vec3 lightPoint = vec3(mix(-1.25, 1.25, lightRand.x), 9.98, mix(-1.05, 1.05, lightRand.y));
-                vec3 toLight = lightPoint - hit.p;
-                float distSq = dot(toLight, toLight);
-                float dist = sqrt(distSq);
-                vec3 lightDir = toLight / dist;
+                if (uTechnique != 0) {
+                    vec2 lightRand = r4.xy;
+                    vec3 lightPoint = vec3(mix(-1.25, 1.25, lightRand.x), 9.98, mix(-1.05, 1.05, lightRand.y));
+                    vec3 toLight = lightPoint - hit.p;
+                    float distSq = dot(toLight, toLight);
+                    float dist = sqrt(distSq);
+                    vec3 lightDir = toLight / dist;
 
-                float cosTheta = dot(hit.normal, lightDir);
-                float cosLight = dot(vec3(0.0, -1.0, 0.0), -lightDir);
+                    float cosTheta = dot(hit.normal, lightDir);
+                    float cosLight = max(0.0, lightDir.y);
 
-                if (cosTheta > 0.0 && cosLight > 0.0) {
-                    if (!isOccluded(hit.p + hit.normal * 0.002, lightDir, dist - 0.004)) {
-                        float lightArea = 2.5 * 2.1;
-                        vec3 lightEmission = vec3(17.0, 12.0, 4.0);
-                        float geom = (cosTheta * cosLight) / distSq;
-                        // Firefly suppression: clamp direct illumination spikes
-                        geom = min(geom, 2.0);
-                        radiance += throughput * hit.albedo * lightEmission * (geom * lightArea * (1.0 / 3.14159265));
+                    if (cosTheta > 0.0 && cosLight > 0.0) {
+                        if (!isOccluded(hit.p + hit.normal * 0.002, lightDir, dist - 0.004)) {
+                            float lightArea = 2.5 * 2.1;
+                            vec3 lightEmission = vec3(17.0, 12.0, 4.0);
+                            float pdfLight = distSq / (lightArea * cosLight);
+
+                            vec3 brdfVal;
+                            float pdfBrdf;
+
+                            if (hit.metallic > 0.5) {
+                                vec3 R = reflect(ray.dir, hit.normal);
+                                float cosAlpha = max(0.0, dot(R, lightDir));
+                                float s = 2.0 / (hit.roughness * hit.roughness);
+                                float spec = ((s + 2.0) / 6.2831853) * pow(cosAlpha, s);
+                                brdfVal = hit.albedo * spec;
+                                pdfBrdf = ((s + 1.0) / 6.2831853) * pow(cosAlpha, s);
+                            } else {
+                                brdfVal = hit.albedo * (1.0 / 3.14159265);
+                                pdfBrdf = cosTheta * (1.0 / 3.14159265);
+                            }
+
+                            float wNee = 1.0;
+                            if (uTechnique == 2) {
+                                wNee = powerHeuristic(pdfLight, pdfBrdf);
+                            }
+
+                            radiance += throughput * brdfVal * lightEmission * ((cosTheta * cosLight * lightArea) / distSq) * wNee;
+                        }
                     }
                 }
 
-                // Stratified indirect bounce
-                vec3 newDir = cosineSampleHemisphere(hit.normal, r4.zw);
-                throughput *= hit.albedo;
+                // 2. Surface Bounce (BRDF Sampling)
+                vec3 newDir;
+                if (hit.metallic > 0.5) {
+                    vec3 R = reflect(ray.dir, hit.normal);
+                    vec3 perturb = cosineSampleHemisphere(R, r4.zw);
+                    newDir = normalize(mix(R, perturb, hit.roughness));
+                    if (dot(newDir, hit.normal) < 0.0) {
+                        newDir = reflect(newDir, hit.normal);
+                    }
+                    float cosR = max(0.0, dot(R, newDir));
+                    float s = 2.0 / (hit.roughness * hit.roughness);
+                    lastPdfBrdf = ((s + 1.0) / 6.2831853) * pow(cosR, s);
+                    throughput *= hit.albedo;
+                } else {
+                    newDir = cosineSampleHemisphere(hit.normal, r4.zw);
+                    float cosBounce = max(0.0, dot(hit.normal, newDir));
+                    lastPdfBrdf = cosBounce * (1.0 / 3.14159265);
+                    throughput *= hit.albedo;
+                }
 
                 ray.origin = hit.p + hit.normal * 0.002;
                 ray.dir = newDir;
@@ -487,6 +637,8 @@
             uFrameSeed: gl.getUniformLocation(ptProgram, 'uFrameSeed'),
             uSampleCount: gl.getUniformLocation(ptProgram, 'uSampleCount'),
             uSamplesPerFrame: gl.getUniformLocation(ptProgram, 'uSamplesPerFrame'),
+            uTechnique: gl.getUniformLocation(ptProgram, 'uTechnique'),
+            uUseSphere: gl.getUniformLocation(ptProgram, 'uUseSphere'),
             uAccumTexture: gl.getUniformLocation(ptProgram, 'uAccumTexture')
         };
 
@@ -536,9 +688,74 @@
         let frameCount = 0;
         let lastFpsUpdate = performance.now();
         let samplesPerFrame = 2;
+        let singlePassLock = false;
+        let currentTechnique = 2; // 0: Pure BRDF, 1: Pure NEE, 2: MIS
+        let useSphere = false;
+
         const sampleEl = document.getElementById('hud-samples');
         const fpsEl = document.getElementById('hud-fps');
         const sppEl = document.getElementById('hud-spp');
+        const btnSinglePass = document.getElementById('btn-single-pass');
+        const btnTechnique = document.getElementById('btn-technique');
+        const btnObject = document.getElementById('btn-object');
+
+        function updateHUD() {
+            if (btnSinglePass) {
+                btnSinglePass.textContent = `1-Frame: ${singlePassLock ? 'ON' : 'OFF'} [P]`;
+                btnSinglePass.classList.toggle('hud-btn-active', singlePassLock);
+            }
+            if (btnTechnique) {
+                const names = ['Pure BRDF', 'Pure NEE', 'MIS'];
+                btnTechnique.textContent = `Technique: ${names[currentTechnique]} [T]`;
+                btnTechnique.classList.toggle('hud-btn-active', currentTechnique === 2);
+            }
+            if (btnObject) {
+                btnObject.textContent = `Object: ${useSphere ? 'Metal Ball' : 'Cube'} [O]`;
+                btnObject.classList.toggle('hud-btn-active', useSphere);
+            }
+        }
+
+        function toggleSinglePassLock() {
+            singlePassLock = !singlePassLock;
+            sampleCount = 0;
+            if (sampleEl) sampleEl.textContent = singlePassLock ? `1 Frame (${samplesPerFrame} rays)` : '0';
+            updateHUD();
+        }
+
+        function cycleTechnique() {
+            currentTechnique = (currentTechnique + 1) % 3;
+            sampleCount = 0;
+            if (sampleEl) sampleEl.textContent = singlePassLock ? `1 Frame (${samplesPerFrame} rays)` : '0';
+            updateHUD();
+        }
+
+        function toggleObject() {
+            useSphere = !useSphere;
+            sampleCount = 0;
+            if (sampleEl) sampleEl.textContent = singlePassLock ? `1 Frame (${samplesPerFrame} rays)` : '0';
+            updateHUD();
+        }
+
+        if (btnSinglePass) {
+            btnSinglePass.addEventListener('click', (e) => {
+                e.stopPropagation();
+                toggleSinglePassLock();
+            });
+        }
+
+        if (btnTechnique) {
+            btnTechnique.addEventListener('click', (e) => {
+                e.stopPropagation();
+                cycleTechnique();
+            });
+        }
+
+        if (btnObject) {
+            btnObject.addEventListener('click', (e) => {
+                e.stopPropagation();
+                toggleObject();
+            });
+        }
 
         let internalFormat = gl.RGBA32F;
         let texType = gl.FLOAT;
@@ -630,30 +847,44 @@
                     samplesPerFrame = 1;
                     if (sppEl) sppEl.textContent = samplesPerFrame;
                     sampleCount = 0;
+                    if (singlePassLock && sampleEl) sampleEl.textContent = `1 Frame (${samplesPerFrame} rays)`;
                     break;
                 case 'Digit2':
                 case 'Numpad2':
                     samplesPerFrame = 2;
                     if (sppEl) sppEl.textContent = samplesPerFrame;
                     sampleCount = 0;
+                    if (singlePassLock && sampleEl) sampleEl.textContent = `1 Frame (${samplesPerFrame} rays)`;
                     break;
                 case 'Digit3':
                 case 'Numpad3':
                     samplesPerFrame = 4;
                     if (sppEl) sppEl.textContent = samplesPerFrame;
                     sampleCount = 0;
+                    if (singlePassLock && sampleEl) sampleEl.textContent = `1 Frame (${samplesPerFrame} rays)`;
                     break;
                 case 'Digit4':
                 case 'Numpad4':
                     samplesPerFrame = 8;
                     if (sppEl) sppEl.textContent = samplesPerFrame;
                     sampleCount = 0;
+                    if (singlePassLock && sampleEl) sampleEl.textContent = `1 Frame (${samplesPerFrame} rays)`;
                     break;
                 case 'Digit5':
                 case 'Numpad5':
                     samplesPerFrame = 16;
                     if (sppEl) sppEl.textContent = samplesPerFrame;
                     sampleCount = 0;
+                    if (singlePassLock && sampleEl) sampleEl.textContent = `1 Frame (${samplesPerFrame} rays)`;
+                    break;
+                case 'KeyP':
+                    toggleSinglePassLock();
+                    break;
+                case 'KeyT':
+                    cycleTechnique();
+                    break;
+                case 'KeyO':
+                    toggleObject();
                     break;
             }
         });
@@ -725,6 +956,7 @@
 
             // 1. Path Tracing Accumulation Pass
             gl.bindFramebuffer(gl.FRAMEBUFFER, fbos[writeIndex]);
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
             gl.viewport(0, 0, canvas.width, canvas.height);
             gl.useProgram(ptProgram);
 
@@ -764,8 +996,11 @@
             gl.uniformMatrix3fv(ptUniforms.uCamRot, false, rotMatrix);
             gl.uniform1f(ptUniforms.uFov, cam.fov);
             gl.uniform1ui(ptUniforms.uFrameSeed, (Math.random() * 0xFFFFFFFF) >>> 0);
-            gl.uniform1i(ptUniforms.uSampleCount, sampleCount);
+            const currentSampleCount = singlePassLock ? 0 : sampleCount;
+            gl.uniform1i(ptUniforms.uSampleCount, currentSampleCount);
             gl.uniform1i(ptUniforms.uSamplesPerFrame, samplesPerFrame);
+            gl.uniform1i(ptUniforms.uTechnique, currentTechnique);
+            gl.uniform1i(ptUniforms.uUseSphere, useSphere ? 1 : 0);
 
             gl.bindVertexArray(quadVAO);
             gl.drawArrays(gl.TRIANGLES, 0, 6);
@@ -786,9 +1021,14 @@
             const temp = readIndex;
             readIndex = writeIndex;
             writeIndex = temp;
-            sampleCount += samplesPerFrame;
 
-            if (sampleEl) sampleEl.textContent = sampleCount;
+            if (singlePassLock) {
+                sampleCount = 0;
+                if (sampleEl) sampleEl.textContent = `1 Frame (${samplesPerFrame} rays)`;
+            } else {
+                sampleCount += samplesPerFrame;
+                if (sampleEl) sampleEl.textContent = sampleCount;
+            }
 
             frameCount++;
             if (now - lastFpsUpdate >= 250) {
@@ -803,6 +1043,7 @@
 
         window.onload = function () {
             onResize();
+            updateHUD();
             requestAnimationFrame(render);
         };
     </script>
