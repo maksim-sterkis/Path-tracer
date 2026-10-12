@@ -18,77 +18,82 @@
       overflow: hidden;
       background-color: #000000;
       cursor: crosshair;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "JetBrains Mono", Consolas, monospace;
     }
     canvas {
       display: block;
       width: 100vw;
       height: 100vh;
     }
+    /* Minimal pure text overlay: no cards, no borders, no backgrounds */
+    .hud {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 10;
+      font-family: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas, monospace;
+      font-size: 11px;
+      letter-spacing: 0.05em;
+      color: rgba(255, 255, 255, 0.88);
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95), 0 0 2px rgba(0, 0, 0, 0.95);
+    }
+    #hud-top {
+      position: absolute;
+      top: 14px;
+      left: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    #hud-bottom {
+      position: absolute;
+      bottom: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      white-space: nowrap;
+      color: rgba(255, 255, 255, 0.65);
+    }
+    .hud-hidden {
+      display: none !important;
+    }
   </style>
 </head>
 <body>
   <canvas id="pt-canvas"></canvas>
 
+  <div id="hud" class="hud">
+    <div id="hud-top">
+      <div>PASSES: <span id="hud-samples">0</span></div>
+      <div>RES: <span id="hud-res">0 × 0</span></div>
+    </div>
+    <div id="hud-bottom">
+      WASD: Move &nbsp;·&nbsp; Space: Up &nbsp;·&nbsp; Shift: Down &nbsp;·&nbsp; Click: Look &nbsp;·&nbsp; H: Hide Text
+    </div>
+  </div>
+
   <script>
-    const canvas = document.getElementById('pt-canvas');
-    let gl = null;
-
-    // Movement state
-    const keys = {
-      forward: false,
-      backward: false,
-      left: false,
-      right: false,
-      up: false,
-      down: false
-    };
-
-    // Camera parameters
-    const cam = {
-      pos: [0.0, 5.0, 11.0],
-      yaw: 0.0,
-      pitch: 0.0,
-      fov: 60.0 * (Math.PI / 180.0),
-      speed: 5.5,
-      lookSpeed: 0.0022
-    };
-
-    // Frame tracking and ping-pong state
-    let sampleCount = 0;
-    let readIndex = 0;
-    let writeIndex = 1;
-    let accumFBOs = [];
-    let accumTextures = [];
-    let ptProgram = null;
-    let displayProgram = null;
-    let quadVAO = null;
-    let lastTime = performance.now();
-
     const vsSource = `#version 300 es
-    precision highp float;
-    in vec2 a_pos;
-    out vec2 v_uv;
+    layout(location = 0) in vec2 aPosition;
+    out vec2 vUV;
     void main() {
-        v_uv = a_pos * 0.5 + 0.5;
-        gl_Position = vec4(a_pos, 0.0, 1.0);
+        vUV = aPosition * 0.5 + 0.5;
+        gl_Position = vec4(aPosition, 0.0, 1.0);
     }`;
 
     const ptFsSource = `#version 300 es
     precision highp float;
     precision highp int;
 
-    in vec2 v_uv;
+    in vec2 vUV;
     out vec4 fragColor;
 
-    uniform vec3 u_camPos;
-    uniform vec3 u_camForward;
-    uniform vec3 u_camRight;
-    uniform vec3 u_camUp;
-    uniform float u_fov;
-    uniform vec2 u_resolution;
-    uniform int u_sampleCount;
-    uniform float u_time;
-    uniform sampler2D u_prevTexture;
+    uniform vec2 uResolution;
+    uniform vec3 uCamPos;
+    uniform mat3 uCamRot;
+    uniform float uFov;
+    uniform uint uFrameSeed;
+    uniform int uSampleCount;
+    uniform sampler2D uAccumTexture;
 
     struct Ray {
         vec3 origin;
@@ -103,44 +108,47 @@
         vec3 emission;
     };
 
-    uint pcg_hash(inout uint state) {
-        uint prev = state * 747796405u + 2891336453u;
-        uint word = ((prev >> ((prev >> 28u) + 4u)) ^ prev) * 277803737u;
-        state = prev;
+    // Fast PCG PRNG
+    uint pcg(inout uint state) {
+        state = state * 747796405u + 2891336453u;
+        uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
         return (word >> 22u) ^ word;
     }
 
     float rand(inout uint state) {
-        return float(pcg_hash(state)) / 4294967295.0;
+        return float(pcg(state)) / 4294967296.0;
     }
 
     vec2 rand2(inout uint state) {
         return vec2(rand(state), rand(state));
     }
 
-    vec3 cosineSampleHemisphere(vec3 n, inout uint seed) {
-        float u1 = rand(seed);
-        float u2 = rand(seed);
-        float r = sqrt(u1);
-        float phi = 6.28318530718 * u2;
-        vec3 p = vec3(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - u1)));
+    // Cosine-weighted hemisphere sampling
+    vec3 cosineSampleHemisphere(vec3 n, inout uint state) {
+        vec2 r = rand2(state);
+        float phi = 6.28318530718 * r.x;
+        float sinTheta = sqrt(r.y);
+        float cosTheta = sqrt(max(0.0, 1.0 - r.y));
+
+        vec3 local = vec3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
 
         vec3 up = abs(n.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
         vec3 tangent = normalize(cross(up, n));
         vec3 bitangent = cross(n, tangent);
 
-        return normalize(tangent * p.x + bitangent * p.y + n * p.z);
+        return normalize(tangent * local.x + bitangent * local.y + n * local.z);
     }
 
-    bool intersectBox(Ray r, vec3 center, vec3 halfSize, float angleY, vec3 albedo, inout HitInfo bestHit) {
+    // Analytic rotated cuboid intersection
+    void intersectBox(Ray r, vec3 center, vec3 halfSize, float angleY, vec3 albedo, inout HitInfo hit) {
         vec3 ro = r.origin - center;
         float cosA = cos(-angleY);
         float sinA = sin(-angleY);
-        ro = vec3(ro.x * cosA - ro.z * sinA, ro.y, ro.x * sinA + ro.z * cosA);
-        vec3 rd = vec3(r.dir.x * cosA - r.dir.z * sinA, r.dir.y, r.dir.x * sinA + r.dir.z * cosA);
+        vec3 localRo = vec3(ro.x * cosA - ro.z * sinA, ro.y, ro.x * sinA + ro.z * cosA);
+        vec3 localRd = vec3(r.dir.x * cosA - r.dir.z * sinA, r.dir.y, r.dir.x * sinA + r.dir.z * cosA);
 
-        vec3 m = 1.0 / rd;
-        vec3 n = m * ro;
+        vec3 m = 1.0 / localRd;
+        vec3 n = m * localRo;
         vec3 k = abs(m) * halfSize;
         vec3 t1 = -n - k;
         vec3 t2 = -n + k;
@@ -148,88 +156,44 @@
         float tN = max(max(t1.x, t1.y), t1.z);
         float tF = min(min(t2.x, t2.y), t2.z);
 
-        if (tN > tF || tF < 0.001) return false;
+        if (tN > tF || tF < 0.001) return;
 
         float t = tN > 0.001 ? tN : tF;
-        if (t > bestHit.t || t < 0.001) return false;
+        if (t < hit.t) {
+            hit.t = t;
+            hit.p = r.origin + r.dir * t;
+            hit.albedo = albedo;
+            hit.emission = vec3(0.0);
 
-        vec3 localHit = ro + rd * t;
-        vec3 dVec = abs(localHit) - halfSize;
-        vec3 localNormal;
-        if (dVec.x > dVec.y && dVec.x > dVec.z) {
-            localNormal = vec3(sign(localHit.x), 0.0, 0.0);
-        } else if (dVec.y > dVec.z) {
-            localNormal = vec3(0.0, sign(localHit.y), 0.0);
-        } else {
-            localNormal = vec3(0.0, 0.0, sign(localHit.z));
+            vec3 hitLocal = localRo + localRd * t;
+            vec3 d = abs(hitLocal) - halfSize;
+            vec3 normLocal = vec3(0.0);
+            if (d.x > d.y && d.x > d.z) {
+                normLocal = vec3(sign(hitLocal.x), 0.0, 0.0);
+            } else if (d.y > d.z) {
+                normLocal = vec3(0.0, sign(hitLocal.y), 0.0);
+            } else {
+                normLocal = vec3(0.0, 0.0, sign(hitLocal.z));
+            }
+
+            float cosB = cos(angleY);
+            float sinB = sin(angleY);
+            hit.normal = normalize(vec3(normLocal.x * cosB - normLocal.z * sinB, normLocal.y, normLocal.x * sinB + normLocal.z * cosB));
+            if (dot(hit.normal, r.dir) > 0.0) {
+                hit.normal = -hit.normal;
+            }
         }
-
-        float cosW = cos(angleY);
-        float sinW = sin(angleY);
-        vec3 worldNormal = vec3(localNormal.x * cosW - localNormal.z * sinW, localNormal.y, localNormal.x * sinW + localNormal.z * cosW);
-
-        bestHit.t = t;
-        bestHit.p = r.origin + r.dir * t;
-        bestHit.normal = normalize(worldNormal);
-        bestHit.albedo = albedo;
-        bestHit.emission = vec3(0.0);
-        return true;
     }
 
     bool intersectScene(Ray r, inout HitInfo hit) {
         hit.t = 1e20;
 
-        // 1. Left Wall (Red) X = -5.0
-        if (abs(r.dir.x) > 1e-6) {
-            float t = (-5.0 - r.origin.x) / r.dir.x;
-            if (t > 0.001 && t < hit.t) {
-                vec3 p = r.origin + r.dir * t;
-                if (p.y >= 0.0 && p.y <= 10.0 && p.z >= -5.0 && p.z <= 5.0) {
-                    hit.t = t;
-                    hit.p = p;
-                    hit.normal = vec3(1.0, 0.0, 0.0);
-                    hit.albedo = vec3(0.65, 0.05, 0.05);
-                    hit.emission = vec3(0.0);
-                }
-            }
-        }
-
-        // 2. Right Wall (Green) X = 5.0
-        if (abs(r.dir.x) > 1e-6) {
-            float t = (5.0 - r.origin.x) / r.dir.x;
-            if (t > 0.001 && t < hit.t) {
-                vec3 p = r.origin + r.dir * t;
-                if (p.y >= 0.0 && p.y <= 10.0 && p.z >= -5.0 && p.z <= 5.0) {
-                    hit.t = t;
-                    hit.p = p;
-                    hit.normal = vec3(-1.0, 0.0, 0.0);
-                    hit.albedo = vec3(0.12, 0.45, 0.15);
-                    hit.emission = vec3(0.0);
-                }
-            }
-        }
-
-        // 3. Back Wall (White) Z = -5.0
-        if (abs(r.dir.z) > 1e-6) {
-            float t = (-5.0 - r.origin.z) / r.dir.z;
-            if (t > 0.001 && t < hit.t) {
-                vec3 p = r.origin + r.dir * t;
-                if (p.x >= -5.0 && p.x <= 5.0 && p.y >= 0.0 && p.y <= 10.0) {
-                    hit.t = t;
-                    hit.p = p;
-                    hit.normal = vec3(0.0, 0.0, 1.0);
-                    hit.albedo = vec3(0.73, 0.73, 0.73);
-                    hit.emission = vec3(0.0);
-                }
-            }
-        }
-
-        // 4. Floor (White) Y = 0.0
-        if (abs(r.dir.y) > 1e-6) {
+        // Floor (y = 0.0)
+        if (r.dir.y != 0.0) {
             float t = (0.0 - r.origin.y) / r.dir.y;
             if (t > 0.001 && t < hit.t) {
                 vec3 p = r.origin + r.dir * t;
-                if (p.x >= -5.0 && p.x <= 5.0 && p.z >= -5.0 && p.z <= 5.0) {
+                if (abs(p.x) <= 5.0 && p.z >= -5.0 && p.z <= 6.0) {
                     hit.t = t;
                     hit.p = p;
                     hit.normal = vec3(0.0, 1.0, 0.0);
@@ -239,68 +203,127 @@
             }
         }
 
-        // 5. Ceiling (White) Y = 10.0
-        if (abs(r.dir.y) > 1e-6) {
+        // Ceiling with area light (y = 10.0)
+        if (r.dir.y != 0.0) {
             float t = (10.0 - r.origin.y) / r.dir.y;
             if (t > 0.001 && t < hit.t) {
                 vec3 p = r.origin + r.dir * t;
-                if (p.x >= -5.0 && p.x <= 5.0 && p.z >= -5.0 && p.z <= 5.0) {
+                if (abs(p.x) <= 5.0 && p.z >= -5.0 && p.z <= 6.0) {
                     hit.t = t;
                     hit.p = p;
                     hit.normal = vec3(0.0, -1.0, 0.0);
+                    if (abs(p.x) <= 1.75 && abs(p.z) <= 1.75) {
+                        hit.albedo = vec3(1.0);
+                        hit.emission = vec3(24.0, 20.0, 16.0);
+                    } else {
+                        hit.albedo = vec3(0.73, 0.73, 0.73);
+                        hit.emission = vec3(0.0);
+                    }
+                }
+            }
+        }
+
+        // Back wall (z = -5.0)
+        if (r.dir.z != 0.0) {
+            float t = (-5.0 - r.origin.z) / r.dir.z;
+            if (t > 0.001 && t < hit.t) {
+                vec3 p = r.origin + r.dir * t;
+                if (abs(p.x) <= 5.0 && p.y >= 0.0 && p.y <= 10.0) {
+                    hit.t = t;
+                    hit.p = p;
+                    hit.normal = vec3(0.0, 0.0, 1.0);
                     hit.albedo = vec3(0.73, 0.73, 0.73);
                     hit.emission = vec3(0.0);
                 }
             }
         }
 
-        // 6. Ceiling Light Source Y = 9.99
-        if (abs(r.dir.y) > 1e-6) {
-            float t = (9.99 - r.origin.y) / r.dir.y;
+        // Left wall (x = -5.0, Red)
+        if (r.dir.x != 0.0) {
+            float t = (-5.0 - r.origin.x) / r.dir.x;
             if (t > 0.001 && t < hit.t) {
                 vec3 p = r.origin + r.dir * t;
-                if (p.x >= -1.75 && p.x <= 1.75 && p.z >= -1.75 && p.z <= 1.75) {
+                if (p.y >= 0.0 && p.y <= 10.0 && p.z >= -5.0 && p.z <= 6.0) {
                     hit.t = t;
                     hit.p = p;
-                    hit.normal = vec3(0.0, -1.0, 0.0);
-                    hit.albedo = vec3(0.0);
-                    hit.emission = vec3(24.0, 20.0, 16.0);
+                    hit.normal = vec3(1.0, 0.0, 0.0);
+                    hit.albedo = vec3(0.75, 0.15, 0.15);
+                    hit.emission = vec3(0.0);
                 }
             }
         }
 
-        // 7. Tall Box
-        intersectBox(r, vec3(-1.6, 3.0, -1.8), vec3(1.5, 3.0, 1.5), 0.30, vec3(0.73, 0.73, 0.73), hit);
+        // Right wall (x = 5.0, Green)
+        if (r.dir.x != 0.0) {
+            float t = (5.0 - r.origin.x) / r.dir.x;
+            if (t > 0.001 && t < hit.t) {
+                vec3 p = r.origin + r.dir * t;
+                if (p.y >= 0.0 && p.y <= 10.0 && p.z >= -5.0 && p.z <= 6.0) {
+                    hit.t = t;
+                    hit.p = p;
+                    hit.normal = vec3(-1.0, 0.0, 0.0);
+                    hit.albedo = vec3(0.15, 0.75, 0.15);
+                    hit.emission = vec3(0.0);
+                }
+            }
+        }
 
-        // 8. Short Box
+        // Tall Box & Short Box
+        intersectBox(r, vec3(-1.6, 3.0, -1.8), vec3(1.5, 3.0, 1.5), 0.30, vec3(0.73, 0.73, 0.73), hit);
         intersectBox(r, vec3(1.6, 1.5, 1.6), vec3(1.5, 1.5, 1.5), -0.30, vec3(0.73, 0.73, 0.73), hit);
 
         return hit.t < 1e19;
     }
 
+    bool isOccludedBox(Ray r, vec3 center, vec3 halfSize, float angleY, float maxT) {
+        vec3 ro = r.origin - center;
+        float cosA = cos(-angleY);
+        float sinA = sin(-angleY);
+        vec3 localRo = vec3(ro.x * cosA - ro.z * sinA, ro.y, ro.x * sinA + ro.z * cosA);
+        vec3 localRd = vec3(r.dir.x * cosA - r.dir.z * sinA, r.dir.y, r.dir.x * sinA + r.dir.z * cosA);
+
+        vec3 m = 1.0 / localRd;
+        vec3 n = m * localRo;
+        vec3 k = abs(m) * halfSize;
+        vec3 t1 = -n - k;
+        vec3 t2 = -n + k;
+
+        float tN = max(max(t1.x, t1.y), t1.z);
+        float tF = min(min(t2.x, t2.y), t2.z);
+
+        if (tN > tF || tF < 0.001) return false;
+        float t = tN > 0.001 ? tN : tF;
+        return (t > 0.001 && t < maxT);
+    }
+
+    bool isOccluded(vec3 origin, vec3 dir, float maxDist) {
+        Ray r;
+        r.origin = origin;
+        r.dir = dir;
+        if (isOccludedBox(r, vec3(-1.6, 3.0, -1.8), vec3(1.5, 3.0, 1.5), 0.30, maxDist)) return true;
+        if (isOccludedBox(r, vec3(1.6, 1.5, 1.6), vec3(1.5, 1.5, 1.5), -0.30, maxDist)) return true;
+        return false;
+    }
+
     void main() {
-        uint seed = uint(gl_FragCoord.x) * 1973u + 
-                    uint(gl_FragCoord.y) * 9277u + 
-                    uint(u_sampleCount) * 26699u + 
-                    uint(fract(u_time) * 100000.0);
+        uint seed = uFrameSeed ^ (uint(gl_FragCoord.x) * 1973u) ^ (uint(gl_FragCoord.y) * 9277u);
 
-        // Sub-pixel jitter for anti-aliasing
         vec2 jitter = rand2(seed) - 0.5;
-        vec2 screenCoord = (gl_FragCoord.xy + jitter) / u_resolution;
-        vec2 ndc = screenCoord * 2.0 - 1.0;
-        ndc.x *= (u_resolution.x / u_resolution.y);
+        vec2 uv = (gl_FragCoord.xy + jitter) / uResolution;
+        vec2 ndc = uv * 2.0 - 1.0;
+        ndc.x *= (uResolution.x / uResolution.y);
 
-        float tanHalfFov = tan(u_fov * 0.5);
-        vec3 rayDir = normalize(u_camForward + (ndc.x * tanHalfFov) * u_camRight + (ndc.y * tanHalfFov) * u_camUp);
+        float fovScale = tan(uFov * 0.5);
+        vec3 rayDirView = normalize(vec3(ndc.x * fovScale, ndc.y * fovScale, -1.0));
+        vec3 rayDirWorld = normalize(uCamRot * rayDirView);
 
         Ray ray;
-        ray.origin = u_camPos;
-        ray.dir = rayDir;
+        ray.origin = uCamPos;
+        ray.dir = rayDirWorld;
 
         vec3 radiance = vec3(0.0);
         vec3 throughput = vec3(1.0);
 
-        // 3-bounce path tracer
         const int MAX_BOUNCES = 3;
         for (int b = 0; b < MAX_BOUNCES; ++b) {
             HitInfo hit;
@@ -308,12 +331,34 @@
                 break;
             }
 
-            radiance += throughput * hit.emission;
-
             if (length(hit.emission) > 0.0) {
+                if (b == 0) {
+                    radiance += throughput * hit.emission;
+                }
                 break;
             }
 
+            // Next Event Estimation (Direct Area Light Sampling)
+            vec2 lightRand = rand2(seed);
+            vec3 lightPoint = vec3(mix(-1.75, 1.75, lightRand.x), 9.98, mix(-1.75, 1.75, lightRand.y));
+            vec3 toLight = lightPoint - hit.p;
+            float distSq = dot(toLight, toLight);
+            float dist = sqrt(distSq);
+            vec3 lightDir = toLight / dist;
+
+            float cosTheta = dot(hit.normal, lightDir);
+            float cosLight = dot(vec3(0.0, -1.0, 0.0), -lightDir);
+
+            if (cosTheta > 0.0 && cosLight > 0.0) {
+                if (!isOccluded(hit.p + hit.normal * 0.002, lightDir, dist - 0.004)) {
+                    float lightArea = 3.5 * 3.5;
+                    vec3 lightEmission = vec3(24.0, 20.0, 16.0);
+                    float geom = (cosTheta * cosLight) / distSq;
+                    radiance += throughput * hit.albedo * lightEmission * (geom * lightArea * (1.0 / 3.14159265));
+                }
+            }
+
+            // Cosine-weighted indirect bounce
             vec3 newDir = cosineSampleHemisphere(hit.normal, seed);
             throughput *= hit.albedo;
 
@@ -321,130 +366,236 @@
             ray.dir = newDir;
         }
 
-        // Temporal progressive accumulation
-        vec3 finalSample = radiance;
-        if (u_sampleCount > 0) {
-            vec3 prevColor = texture(u_prevTexture, v_uv).rgb;
-            finalSample = mix(prevColor, radiance, 1.0 / float(u_sampleCount + 1));
+        vec4 prevColor = texture(uAccumTexture, gl_FragCoord.xy / uResolution);
+        if (uSampleCount == 0) {
+            fragColor = vec4(radiance, 1.0);
+        } else {
+            float weight = 1.0 / float(uSampleCount + 1);
+            fragColor = vec4(mix(prevColor.rgb, radiance, weight), 1.0);
         }
-
-        fragColor = vec4(finalSample, 1.0);
     }`;
 
     const displayFsSource = `#version 300 es
     precision highp float;
 
-    in vec2 v_uv;
+    in vec2 vUV;
     out vec4 fragColor;
 
-    uniform sampler2D u_accumTexture;
+    uniform sampler2D uAccumTexture;
 
-    // ACES Filmic Tone Mapping Curve
-    vec3 aces(vec3 x) {
-        const float a = 2.51;
-        const float b = 0.03;
-        const float c = 2.43;
-        const float d = 0.59;
-        const float e = 0.14;
+    vec3 ACESFilm(vec3 x) {
+        float a = 2.51;
+        float b = 0.03;
+        float c = 2.43;
+        float d = 0.59;
+        float e = 0.14;
         return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
     }
 
     void main() {
-        vec3 rawColor = texture(u_accumTexture, v_uv).rgb;
-        vec3 mapped = aces(rawColor);
-        // Linear to sRGB gamma correction
-        vec3 corrected = pow(mapped, vec3(1.0 / 2.2));
-        fragColor = vec4(corrected, 1.0);
+        vec3 color = texture(uAccumTexture, vUV).rgb;
+        color = ACESFilm(color);
+        color = pow(color, vec3(1.0 / 2.2));
+        fragColor = vec4(color, 1.0);
     }`;
 
-    function createShader(gl, type, source) {
-      const shader = gl.createShader(type);
-      gl.shaderSource(shader, source);
-      gl.compileShader(shader);
-      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-        console.error(gl.getShaderInfoLog(shader));
-        gl.deleteShader(shader);
+    const canvas = document.getElementById('pt-canvas');
+    const gl = canvas.getContext('webgl2', {
+      antialias: false,
+      powerPreference: 'high-performance',
+      preserveDrawingBuffer: false
+    });
+
+    if (!gl) {
+      document.body.innerHTML = '<div style="color:white;padding:20px;font-family:monospace;">WebGL 2 is not supported by your browser.</div>';
+    }
+
+    gl.getExtension('EXT_color_buffer_float');
+
+    function createShader(glCtx, type, source) {
+      const shader = glCtx.createShader(type);
+      glCtx.shaderSource(shader, source.trim());
+      glCtx.compileShader(shader);
+      if (!glCtx.getShaderParameter(shader, glCtx.COMPILE_STATUS)) {
+        console.error('Shader compile error:', glCtx.getShaderInfoLog(shader));
+        glCtx.deleteShader(shader);
         return null;
       }
       return shader;
     }
 
-    function createProgram(gl, vs, fs) {
-      const program = gl.createProgram();
-      gl.attachShader(program, vs);
-      gl.attachShader(program, fs);
-      gl.linkProgram(program);
-      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-        console.error(gl.getProgramInfoLog(program));
+    function createProgram(glCtx, vsSrc, fsSrc) {
+      const vs = createShader(glCtx, glCtx.VERTEX_SHADER, vsSrc);
+      const fs = createShader(glCtx, glCtx.FRAGMENT_SHADER, fsSrc);
+      if (!vs || !fs) return null;
+      const program = glCtx.createProgram();
+      glCtx.attachShader(program, vs);
+      glCtx.attachShader(program, fs);
+      glCtx.linkProgram(program);
+      if (!glCtx.getProgramParameter(program, glCtx.LINK_STATUS)) {
+        console.error('Program link error:', glCtx.getProgramInfoLog(program));
+        glCtx.deleteProgram(program);
         return null;
       }
       return program;
     }
 
+    const ptProgram = createProgram(gl, vsSource, ptFsSource);
+    const displayProgram = createProgram(gl, vsSource, displayFsSource);
+
+    const ptUniforms = {
+      uResolution: gl.getUniformLocation(ptProgram, 'uResolution'),
+      uCamPos: gl.getUniformLocation(ptProgram, 'uCamPos'),
+      uCamRot: gl.getUniformLocation(ptProgram, 'uCamRot'),
+      uFov: gl.getUniformLocation(ptProgram, 'uFov'),
+      uFrameSeed: gl.getUniformLocation(ptProgram, 'uFrameSeed'),
+      uSampleCount: gl.getUniformLocation(ptProgram, 'uSampleCount'),
+      uAccumTexture: gl.getUniformLocation(ptProgram, 'uAccumTexture')
+    };
+
+    const displayUniforms = {
+      uAccumTexture: gl.getUniformLocation(displayProgram, 'uAccumTexture')
+    };
+
+    const quadVAO = gl.createVertexArray();
+    gl.bindVertexArray(quadVAO);
+    const quadVBO = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadVBO);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      new Float32Array([
+        -1, -1,
+         1, -1,
+        -1,  1,
+        -1,  1,
+         1, -1,
+         1,  1
+      ]),
+      gl.STATIC_DRAW
+    );
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
+
+    const cam = {
+      pos: [0.0, 5.0, 14.0],
+      yaw: 0.0,
+      pitch: 0.0,
+      speed: 6.0,
+      fov: (55.0 * Math.PI) / 180.0
+    };
+
+    const keys = {
+      forward: false,
+      backward: false,
+      left: false,
+      right: false,
+      up: false,
+      down: false
+    };
+
+    let sampleCount = 0;
+    let lastTime = performance.now();
+
+    let internalFormat = gl.RGBA32F;
+    let texType = gl.FLOAT;
+
+    function testFBO(format, type) {
+      const tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, format, 4, 4, 0, gl.RGBA, type, null);
+      const fb = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+      gl.deleteFramebuffer(fb);
+      gl.deleteTexture(tex);
+      return status;
+    }
+
+    if (testFBO(gl.RGBA32F, gl.FLOAT)) {
+      internalFormat = gl.RGBA32F;
+      texType = gl.FLOAT;
+    } else if (gl.HALF_FLOAT && testFBO(gl.RGBA16F, gl.HALF_FLOAT)) {
+      internalFormat = gl.RGBA16F;
+      texType = gl.HALF_FLOAT;
+    } else {
+      internalFormat = gl.RGBA;
+      texType = gl.UNSIGNED_BYTE;
+    }
+
+    const fbos = [null, null];
+    const textures = [null, null];
+    let readIndex = 0;
+    let writeIndex = 1;
+
     function initFBOs(width, height) {
       for (let i = 0; i < 2; i++) {
-        if (accumTextures[i]) gl.deleteTexture(accumTextures[i]);
-        if (accumFBOs[i]) gl.deleteFramebuffer(accumFBOs[i]);
+        if (textures[i]) gl.deleteTexture(textures[i]);
+        if (fbos[i]) gl.deleteFramebuffer(fbos[i]);
 
-        const tex = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D, tex);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, width, height, 0, gl.RGBA, gl.FLOAT, null);
+        textures[i] = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, textures[i]);
+        gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, width, height, 0, gl.RGBA, texType, null);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        accumTextures[i] = tex;
 
-        const fbo = gl.createFramebuffer();
-        gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-        accumFBOs[i] = fbo;
+        fbos[i] = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fbos[i]);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, textures[i], 0);
       }
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      readIndex = 0;
+      writeIndex = 1;
       sampleCount = 0;
     }
 
-    function setupControls() {
-      canvas.addEventListener('click', () => {
-        if (document.pointerLockElement !== canvas) {
-          canvas.requestPointerLock();
-        }
-      });
+    canvas.addEventListener('click', () => {
+      if (document.pointerLockElement !== canvas) {
+        canvas.requestPointerLock();
+      }
+    });
 
-      document.addEventListener('mousemove', (e) => {
-        if (document.pointerLockElement === canvas) {
-          cam.yaw -= e.movementX * cam.lookSpeed;
-          cam.pitch -= e.movementY * cam.lookSpeed;
-          const limit = Math.PI / 2 - 0.02;
-          cam.pitch = Math.max(-limit, Math.min(limit, cam.pitch));
-          sampleCount = 0;
-        }
-      });
+    document.addEventListener('mousemove', (e) => {
+      if (document.pointerLockElement === canvas) {
+        const sensitivity = 0.0022;
+        cam.yaw -= e.movementX * sensitivity;
+        cam.pitch -= e.movementY * sensitivity;
+        cam.pitch = Math.max(-1.52, Math.min(1.52, cam.pitch));
+        sampleCount = 0;
+      }
+    });
 
-      window.addEventListener('keydown', (e) => {
-        switch (e.code) {
-          case 'KeyW': keys.forward = true; break;
-          case 'KeyS': keys.backward = true; break;
-          case 'KeyA': keys.left = true; break;
-          case 'KeyD': keys.right = true; break;
-          case 'Space': keys.up = true; e.preventDefault(); break;
-          case 'ShiftLeft':
-          case 'ShiftRight': keys.down = true; e.preventDefault(); break;
+    window.addEventListener('keydown', (e) => {
+      switch (e.code) {
+        case 'KeyW': keys.forward = true; break;
+        case 'KeyS': keys.backward = true; break;
+        case 'KeyA': keys.left = true; break;
+        case 'KeyD': keys.right = true; break;
+        case 'Space': keys.up = true; e.preventDefault(); break;
+        case 'ShiftLeft':
+        case 'ShiftRight': keys.down = true; e.preventDefault(); break;
+        case 'KeyH': {
+          const hud = document.getElementById('hud');
+          if (hud) hud.classList.toggle('hud-hidden');
+          break;
         }
-      });
+      }
+    });
 
-      window.addEventListener('keyup', (e) => {
-        switch (e.code) {
-          case 'KeyW': keys.forward = false; break;
-          case 'KeyS': keys.backward = false; break;
-          case 'KeyA': keys.left = false; break;
-          case 'KeyD': keys.right = false; break;
-          case 'Space': keys.up = false; break;
-          case 'ShiftLeft':
-          case 'ShiftRight': keys.down = false; break;
-        }
-      });
-    }
+    window.addEventListener('keyup', (e) => {
+      switch (e.code) {
+        case 'KeyW': keys.forward = false; break;
+        case 'KeyS': keys.backward = false; break;
+        case 'KeyA': keys.left = false; break;
+        case 'KeyD': keys.right = false; break;
+        case 'Space': keys.up = false; break;
+        case 'ShiftLeft':
+        case 'ShiftRight': keys.down = false; break;
+      }
+    });
 
     function onResize() {
       const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
@@ -455,34 +606,33 @@
         canvas.width = width;
         canvas.height = height;
         initFBOs(width, height);
+        const resEl = document.getElementById('hud-res');
+        if (resEl) resEl.textContent = `${width} × ${height}`;
       }
     }
 
     function updateCamera(dt) {
       let moved = false;
-      const cosPitch = Math.cos(cam.pitch);
-      const sinPitch = Math.sin(cam.pitch);
-      const cosYaw = Math.cos(cam.yaw);
-      const sinYaw = Math.sin(cam.yaw);
+      const cosY = Math.cos(cam.yaw);
+      const sinY = Math.sin(cam.yaw);
 
-      // Camera orientation basis
-      const forward = [-sinYaw * cosPitch, sinPitch, -cosYaw * cosPitch];
-      const right = [cosYaw, 0.0, -sinYaw];
+      const fwd = [-sinY, 0, -cosY];
+      const right = [cosY, 0, -sinY];
 
       const moveDir = [0, 0, 0];
-      if (keys.forward) { moveDir[0] += forward[0]; moveDir[2] += forward[2]; moved = true; }
-      if (keys.backward) { moveDir[0] -= forward[0]; moveDir[2] -= forward[2]; moved = true; }
+      if (keys.forward) { moveDir[0] += fwd[0]; moveDir[2] += fwd[2]; moved = true; }
+      if (keys.backward) { moveDir[0] -= fwd[0]; moveDir[2] -= fwd[2]; moved = true; }
       if (keys.right) { moveDir[0] += right[0]; moveDir[2] += right[2]; moved = true; }
       if (keys.left) { moveDir[0] -= right[0]; moveDir[2] -= right[2]; moved = true; }
-
-      const len = Math.hypot(moveDir[0], moveDir[2]);
-      if (len > 1e-4) {
-        moveDir[0] /= len;
-        moveDir[2] /= len;
-      }
-
       if (keys.up) { moveDir[1] += 1.0; moved = true; }
       if (keys.down) { moveDir[1] -= 1.0; moved = true; }
+
+      const len = Math.hypot(moveDir[0], moveDir[1], moveDir[2]);
+      if (len > 0.001) {
+        moveDir[0] /= len;
+        moveDir[1] /= len;
+        moveDir[2] /= len;
+      }
 
       if (moved) {
         const dist = cam.speed * dt;
@@ -493,110 +643,87 @@
       }
     }
 
-    function init() {
-      gl = canvas.getContext('webgl2', { antialias: false, powerPreference: 'high-performance' });
-      if (!gl) {
-        console.error('WebGL 2 is not supported on this browser.');
-        return;
-      }
-
-      const ext = gl.getExtension('EXT_color_buffer_float');
-      if (!ext) {
-        console.error('EXT_color_buffer_float extension is not supported.');
-      }
-
-      const vs = createShader(gl, gl.VERTEX_SHADER, vsSource);
-      const ptFs = createShader(gl, gl.FRAGMENT_SHADER, ptFsSource);
-      const dispFs = createShader(gl, gl.FRAGMENT_SHADER, displayFsSource);
-
-      ptProgram = createProgram(gl, vs, ptFs);
-      displayProgram = createProgram(gl, vs, dispFs);
-
-      // Fullscreen Quad Geometry
-      quadVAO = gl.createVertexArray();
-      gl.bindVertexArray(quadVAO);
-      const quadVBO = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, quadVBO);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-        -1.0, -1.0,
-         1.0, -1.0,
-        -1.0,  1.0,
-        -1.0,  1.0,
-         1.0, -1.0,
-         1.0,  1.0
-      ]), gl.STATIC_DRAW);
-
-      gl.enableVertexAttribArray(0);
-      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-
-      setupControls();
-      window.addEventListener('resize', onResize);
-      onResize();
-      requestAnimationFrame(renderLoop);
-    }
-
-    function renderLoop(now) {
-      requestAnimationFrame(renderLoop);
-
-      const dt = Math.min((now - lastTime) / 1000.0, 0.1);
+    function render(now) {
+      const dt = Math.min((now - lastTime) * 0.001, 0.1);
       lastTime = now;
 
+      onResize();
       updateCamera(dt);
 
-      const cosPitch = Math.cos(cam.pitch);
-      const sinPitch = Math.sin(cam.pitch);
-      const cosYaw = Math.cos(cam.yaw);
-      const sinYaw = Math.sin(cam.yaw);
-
-      const forward = [-sinYaw * cosPitch, sinPitch, -cosYaw * cosPitch];
-      const right = [cosYaw, 0.0, -sinYaw];
-      // Orthogonal Up vector
-      const up = [
-        right[1] * forward[2] - right[2] * forward[1],
-        right[2] * forward[0] - right[0] * forward[2],
-        right[0] * forward[1] - right[1] * forward[0]
-      ];
-
-      // 1. Path Tracing Pass -> Write to accumFBOs[writeIndex]
-      gl.bindFramebuffer(gl.FRAMEBUFFER, accumFBOs[writeIndex]);
+      // 1. Path Tracing Accumulation Pass
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbos[writeIndex]);
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.useProgram(ptProgram);
 
-      gl.uniform3fv(gl.getUniformLocation(ptProgram, 'u_camPos'), cam.pos);
-      gl.uniform3fv(gl.getUniformLocation(ptProgram, 'u_camForward'), forward);
-      gl.uniform3fv(gl.getUniformLocation(ptProgram, 'u_camRight'), right);
-      gl.uniform3fv(gl.getUniformLocation(ptProgram, 'u_camUp'), up);
-      gl.uniform1f(gl.getUniformLocation(ptProgram, 'u_fov'), cam.fov);
-      gl.uniform2f(gl.getUniformLocation(ptProgram, 'u_resolution'), canvas.width, canvas.height);
-      gl.uniform1i(gl.getUniformLocation(ptProgram, 'u_sampleCount'), sampleCount);
-      gl.uniform1f(gl.getUniformLocation(ptProgram, 'u_time'), now * 0.001);
-
       gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, accumTextures[readIndex]);
-      gl.uniform1i(gl.getUniformLocation(ptProgram, 'u_prevTexture'), 0);
+      gl.bindTexture(gl.TEXTURE_2D, textures[readIndex]);
+      gl.uniform1i(ptUniforms.uAccumTexture, 0);
+
+      gl.uniform2f(ptUniforms.uResolution, canvas.width, canvas.height);
+      gl.uniform3fv(ptUniforms.uCamPos, cam.pos);
+
+      const cosY = Math.cos(cam.yaw);
+      const sinY = Math.sin(cam.yaw);
+      const cosP = Math.cos(cam.pitch);
+      const sinP = Math.sin(cam.pitch);
+
+      const F = [-sinY * cosP, sinP, -cosY * cosP];
+      const R = [cosY, 0, -sinY];
+      const U = [
+        R[1] * F[2] - R[2] * F[1],
+        R[2] * F[0] - R[0] * F[2],
+        R[0] * F[1] - R[1] * F[0]
+      ];
+
+      const lenF = Math.hypot(F[0], F[1], F[2]);
+      F[0] /= lenF; F[1] /= lenF; F[2] /= lenF;
+      const lenR = Math.hypot(R[0], R[1], R[2]);
+      R[0] /= lenR; R[1] /= lenR; R[2] /= lenR;
+      const lenU = Math.hypot(U[0], U[1], U[2]);
+      U[0] /= lenU; U[1] /= lenU; U[2] /= lenU;
+
+      const rotMatrix = new Float32Array([
+        R[0], R[1], R[2],
+        U[0], U[1], U[2],
+        -F[0], -F[1], -F[2]
+      ]);
+
+      gl.uniformMatrix3fv(ptUniforms.uCamRot, false, rotMatrix);
+      gl.uniform1f(ptUniforms.uFov, cam.fov);
+      gl.uniform1ui(ptUniforms.uFrameSeed, (Math.random() * 0xFFFFFFFF) >>> 0);
+      gl.uniform1i(ptUniforms.uSampleCount, sampleCount);
 
       gl.bindVertexArray(quadVAO);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-      // 2. Display Pass -> Blit tonemapped output to Default Screen Framebuffer
+      // 2. Tonemapping and Output Pass
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.useProgram(displayProgram);
 
       gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, accumTextures[writeIndex]);
-      gl.uniform1i(gl.getUniformLocation(displayProgram, 'u_accumTexture'), 0);
+      gl.bindTexture(gl.TEXTURE_2D, textures[writeIndex]);
+      gl.uniform1i(displayUniforms.uAccumTexture, 0);
 
+      gl.bindVertexArray(quadVAO);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-      // Ping-pong buffer swap & sample counter increment
+      // Ping-pong buffer swap & sample counter update
       const temp = readIndex;
       readIndex = writeIndex;
       writeIndex = temp;
       sampleCount++;
+
+      const sampleEl = document.getElementById('hud-samples');
+      if (sampleEl) sampleEl.textContent = sampleCount;
+
+      requestAnimationFrame(render);
     }
 
-    window.onload = init;
+    window.onload = function() {
+      onResize();
+      requestAnimationFrame(render);
+    };
   </script>
 </body>
 </html>
