@@ -74,11 +74,10 @@
         <div id="hud-top">
             <div>PASSES: <span id="hud-samples">0</span></div>
             <div>RES: <span id="hud-res">0 × 0</span></div>
-            <div>FPS: <span id="hud-fps">0</span></div>
+            <div>FPS: <span id="hud-fps">0</span> &nbsp;·&nbsp; RAYS/FRAME: <span id="hud-spp">2</span></div>
         </div>
         <div id="hud-bottom">
-            WASD: Move &nbsp;·&nbsp; Space: Up &nbsp;·&nbsp; Shift: Down &nbsp;·&nbsp; Click: Look &nbsp;·&nbsp; H: Hide
-            Text
+            WASD: Move &nbsp;·&nbsp; Space: Up &nbsp;·&nbsp; Shift: Down &nbsp;·&nbsp; Click: Look &nbsp;·&nbsp; 1-5: Rays/Frame &nbsp;·&nbsp; H: Hide Text
         </div>
     </div>
 
@@ -104,6 +103,7 @@
     uniform float uFov;
     uniform uint uFrameSeed;
     uniform int uSampleCount;
+    uniform int uSamplesPerFrame;
     uniform sampler2D uAccumTexture;
 
     struct Ray {
@@ -126,17 +126,28 @@
         return (word >> 22u) ^ word;
     }
 
-    float rand(inout uint state) {
-        return float(pcg(state)) / 4294967296.0;
+    vec4 hash4(uvec2 p, uint frameSeed) {
+        uint s = p.x * 1973u ^ p.y * 9277u ^ frameSeed;
+        uint w1 = pcg(s);
+        uint w2 = pcg(s);
+        uint w3 = pcg(s);
+        uint w4 = pcg(s);
+        return vec4(float(w1), float(w2), float(w3), float(w4)) / 4294967296.0;
     }
 
-    vec2 rand2(inout uint state) {
-        return vec2(rand(state), rand(state));
+    // Martin Roberts' generalized golden-ratio low-discrepancy sequences (R2 and R4)
+    vec2 r2Sequence(uint n, vec2 offset) {
+        const vec2 alpha2 = vec2(0.754877666, 0.569840291);
+        return fract(offset + float(n) * alpha2);
     }
 
-    // Cosine-weighted hemisphere sampling
-    vec3 cosineSampleHemisphere(vec3 n, inout uint state) {
-        vec2 r = rand2(state);
+    vec4 r4Sequence(uint n, vec4 offset) {
+        const vec4 alpha4 = vec4(0.72449168, 0.52488850, 0.38028676, 0.27551606);
+        return fract(offset + float(n) * alpha4);
+    }
+
+    // Cosine-weighted hemisphere sampling with stratified low-discrepancy 2D input
+    vec3 cosineSampleHemisphere(vec3 n, vec2 r) {
         float phi = 6.28318530718 * r.x;
         float sinTheta = sqrt(r.y);
         float cosTheta = sqrt(max(0.0, 1.0 - r.y));
@@ -317,72 +328,86 @@
     }
 
     void main() {
-        uint seed = uFrameSeed ^ (uint(gl_FragCoord.x) * 1973u) ^ (uint(gl_FragCoord.y) * 9277u);
+        vec3 passRadiance = vec3(0.0);
+        vec4 pixelOffset = hash4(uvec2(gl_FragCoord.xy), uFrameSeed);
 
-        vec2 jitter = rand2(seed) - 0.5;
-        vec2 uv = (gl_FragCoord.xy + jitter) / uResolution;
-        vec2 ndc = uv * 2.0 - 1.0;
-        ndc.x *= (uResolution.x / uResolution.y);
+        for (int s = 0; s < 32; ++s) {
+            if (s >= uSamplesPerFrame) break;
+            uint sampleIdx = uint(uSampleCount) + uint(s);
 
-        float fovScale = tan(uFov * 0.5);
-        vec3 rayDirView = normalize(vec3(ndc.x * fovScale, ndc.y * fovScale, -1.0));
-        vec3 rayDirWorld = normalize(uCamRot * rayDirView);
+            // Stratified sub-pixel jitter
+            vec2 jitter = r2Sequence(sampleIdx, pixelOffset.xy) - 0.5;
+            vec2 uv = (gl_FragCoord.xy + jitter) / uResolution;
+            vec2 ndc = uv * 2.0 - 1.0;
+            ndc.x *= (uResolution.x / uResolution.y);
 
-        Ray ray;
-        ray.origin = uCamPos;
-        ray.dir = rayDirWorld;
+            float fovScale = tan(uFov * 0.5);
+            vec3 rayDirView = normalize(vec3(ndc.x * fovScale, ndc.y * fovScale, -1.0));
+            vec3 rayDirWorld = normalize(uCamRot * rayDirView);
 
-        vec3 radiance = vec3(0.0);
-        vec3 throughput = vec3(1.0);
+            Ray ray;
+            ray.origin = uCamPos;
+            ray.dir = rayDirWorld;
 
-        const int MAX_BOUNCES = 3;
-        for (int b = 0; b < MAX_BOUNCES; ++b) {
-            HitInfo hit;
-            if (!intersectScene(ray, hit)) {
-                break;
-            }
+            vec3 radiance = vec3(0.0);
+            vec3 throughput = vec3(1.0);
 
-            if (length(hit.emission) > 0.0) {
-                if (b == 0) {
-                    radiance += throughput * hit.emission;
+            const int MAX_BOUNCES = 3;
+            for (int b = 0; b < MAX_BOUNCES; ++b) {
+                HitInfo hit;
+                if (!intersectScene(ray, hit)) {
+                    break;
                 }
-                break;
-            }
 
-            // Next Event Estimation (Direct Area Light Sampling)
-            vec2 lightRand = rand2(seed);
-            vec3 lightPoint = vec3(mix(-1.25, 1.25, lightRand.x), 9.98, mix(-1.05, 1.05, lightRand.y));
-            vec3 toLight = lightPoint - hit.p;
-            float distSq = dot(toLight, toLight);
-            float dist = sqrt(distSq);
-            vec3 lightDir = toLight / dist;
-
-            float cosTheta = dot(hit.normal, lightDir);
-            float cosLight = dot(vec3(0.0, -1.0, 0.0), -lightDir);
-
-            if (cosTheta > 0.0 && cosLight > 0.0) {
-                if (!isOccluded(hit.p + hit.normal * 0.002, lightDir, dist - 0.004)) {
-                    float lightArea = 2.5 * 2.1;
-                    vec3 lightEmission = vec3(17.0, 12.0, 4.0);
-                    float geom = (cosTheta * cosLight) / distSq;
-                    radiance += throughput * hit.albedo * lightEmission * (geom * lightArea * (1.0 / 3.14159265));
+                if (length(hit.emission) > 0.0) {
+                    if (b == 0) {
+                        radiance += throughput * hit.emission;
+                    }
+                    break;
                 }
+
+                // Next Event Estimation with R4 low-discrepancy sampling
+                vec4 r4 = r4Sequence(sampleIdx * 4u + uint(b), pixelOffset);
+                vec2 lightRand = r4.xy;
+                vec3 lightPoint = vec3(mix(-1.25, 1.25, lightRand.x), 9.98, mix(-1.05, 1.05, lightRand.y));
+                vec3 toLight = lightPoint - hit.p;
+                float distSq = dot(toLight, toLight);
+                float dist = sqrt(distSq);
+                vec3 lightDir = toLight / dist;
+
+                float cosTheta = dot(hit.normal, lightDir);
+                float cosLight = dot(vec3(0.0, -1.0, 0.0), -lightDir);
+
+                if (cosTheta > 0.0 && cosLight > 0.0) {
+                    if (!isOccluded(hit.p + hit.normal * 0.002, lightDir, dist - 0.004)) {
+                        float lightArea = 2.5 * 2.1;
+                        vec3 lightEmission = vec3(17.0, 12.0, 4.0);
+                        float geom = (cosTheta * cosLight) / distSq;
+                        // Firefly suppression: clamp direct illumination spikes
+                        geom = min(geom, 2.0);
+                        radiance += throughput * hit.albedo * lightEmission * (geom * lightArea * (1.0 / 3.14159265));
+                    }
+                }
+
+                // Stratified indirect bounce
+                vec3 newDir = cosineSampleHemisphere(hit.normal, r4.zw);
+                throughput *= hit.albedo;
+
+                ray.origin = hit.p + hit.normal * 0.002;
+                ray.dir = newDir;
             }
 
-            // Cosine-weighted indirect bounce
-            vec3 newDir = cosineSampleHemisphere(hit.normal, seed);
-            throughput *= hit.albedo;
-
-            ray.origin = hit.p + hit.normal * 0.002;
-            ray.dir = newDir;
+            passRadiance += radiance;
         }
+
+        passRadiance /= float(uSamplesPerFrame);
 
         vec4 prevColor = texture(uAccumTexture, gl_FragCoord.xy / uResolution);
         if (uSampleCount == 0) {
-            fragColor = vec4(radiance, 1.0);
+            fragColor = vec4(passRadiance, 1.0);
         } else {
-            float weight = 1.0 / float(uSampleCount + 1);
-            fragColor = vec4(mix(prevColor.rgb, radiance, weight), 1.0);
+            float weight = float(uSamplesPerFrame) / float(uSampleCount + uSamplesPerFrame);
+            fragColor = vec4(mix(prevColor.rgb, passRadiance, weight), 1.0);
         }
     }`;
 
@@ -461,6 +486,7 @@
             uFov: gl.getUniformLocation(ptProgram, 'uFov'),
             uFrameSeed: gl.getUniformLocation(ptProgram, 'uFrameSeed'),
             uSampleCount: gl.getUniformLocation(ptProgram, 'uSampleCount'),
+            uSamplesPerFrame: gl.getUniformLocation(ptProgram, 'uSamplesPerFrame'),
             uAccumTexture: gl.getUniformLocation(ptProgram, 'uAccumTexture')
         };
 
@@ -509,8 +535,10 @@
         let lastTime = performance.now();
         let frameCount = 0;
         let lastFpsUpdate = performance.now();
+        let samplesPerFrame = 2;
         const sampleEl = document.getElementById('hud-samples');
         const fpsEl = document.getElementById('hud-fps');
+        const sppEl = document.getElementById('hud-spp');
 
         let internalFormat = gl.RGBA32F;
         let texType = gl.FLOAT;
@@ -597,6 +625,36 @@
                     if (hud) hud.classList.toggle('hud-hidden');
                     break;
                 }
+                case 'Digit1':
+                case 'Numpad1':
+                    samplesPerFrame = 1;
+                    if (sppEl) sppEl.textContent = samplesPerFrame;
+                    sampleCount = 0;
+                    break;
+                case 'Digit2':
+                case 'Numpad2':
+                    samplesPerFrame = 2;
+                    if (sppEl) sppEl.textContent = samplesPerFrame;
+                    sampleCount = 0;
+                    break;
+                case 'Digit3':
+                case 'Numpad3':
+                    samplesPerFrame = 4;
+                    if (sppEl) sppEl.textContent = samplesPerFrame;
+                    sampleCount = 0;
+                    break;
+                case 'Digit4':
+                case 'Numpad4':
+                    samplesPerFrame = 8;
+                    if (sppEl) sppEl.textContent = samplesPerFrame;
+                    sampleCount = 0;
+                    break;
+                case 'Digit5':
+                case 'Numpad5':
+                    samplesPerFrame = 16;
+                    if (sppEl) sppEl.textContent = samplesPerFrame;
+                    sampleCount = 0;
+                    break;
             }
         });
 
@@ -707,6 +765,7 @@
             gl.uniform1f(ptUniforms.uFov, cam.fov);
             gl.uniform1ui(ptUniforms.uFrameSeed, (Math.random() * 0xFFFFFFFF) >>> 0);
             gl.uniform1i(ptUniforms.uSampleCount, sampleCount);
+            gl.uniform1i(ptUniforms.uSamplesPerFrame, samplesPerFrame);
 
             gl.bindVertexArray(quadVAO);
             gl.drawArrays(gl.TRIANGLES, 0, 6);
@@ -727,7 +786,7 @@
             const temp = readIndex;
             readIndex = writeIndex;
             writeIndex = temp;
-            sampleCount++;
+            sampleCount += samplesPerFrame;
 
             if (sampleEl) sampleEl.textContent = sampleCount;
 
